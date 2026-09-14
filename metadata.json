@@ -1,0 +1,10 @@
+{
+  "name": "JARVIS",
+  "description": "Futuristic personal AI assistant command center powered by OmniRoute with real-time streaming, voice interaction, and command parsing.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
