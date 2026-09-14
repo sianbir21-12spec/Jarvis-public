@@ -222,7 +222,6 @@ function findStartMenuShortcut(query: string, maxDepth = 4): string | null {
     path.join(process.env.ProgramData || 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs')
   ].filter(Boolean);
 
-  const needle = query.toLowerCase();
   let bestExact: string | null = null;
   let bestPartial: string | null = null;
 
@@ -347,7 +346,7 @@ export const DESTRUCTIVE_PATTERNS = [
 export async function runShellCommand(command: string, timeoutMs = 20000): Promise<{ stdout: string; stderr: string }> {
   if (DESTRUCTIVE_PATTERNS.some((p) => p.test(command))) {
     throw new Error(
-      `Refused to run this command -- it matches a pattern for destructive/irreversible operations (disk format, mass delete, shutdown, or registry deletion). If this was genuinely intended, run it manually instead.`
+      `Refused to run this command -- it matches a pattern for destructive/irreversible operations (disk format, mass delete, shutdown, or registry deletion). If this was genuinely intended, run [...]`
     );
   }
   const { stdout, stderr } = await execAsync(command, {
