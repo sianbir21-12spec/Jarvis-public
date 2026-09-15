@@ -1,0 +1,6 @@
+@import "tailwindcss";
+@import "./styles/global.css";
+@import "./styles/sidebar.css";
+@import "./styles/chat.css";
+@import "./styles/jarvis.css";
+

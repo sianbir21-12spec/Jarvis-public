@@ -1,0 +1,78 @@
+/* JARVIS Core Arc Reactor & Hologram Animations */
+
+@keyframes jarvis-rotate-clockwise {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes jarvis-rotate-counter {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes jarvis-pulse-glow {
+  0%, 100% {
+    opacity: 0.7;
+    filter: drop-shadow(0 0 12px rgba(6, 182, 212, 0.4));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 24px rgba(6, 182, 212, 0.8));
+  }
+}
+
+@keyframes jarvis-listening-pulse {
+  0% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.7);
+  }
+  70% {
+    transform: scale(1.04);
+    box-shadow: 0 0 0 16px rgba(14, 165, 233, 0);
+  }
+  100% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0);
+  }
+}
+
+@keyframes jarvis-wave-bar {
+  0%, 100% {
+    height: 4px;
+  }
+  50% {
+    height: 24px;
+  }
+}
+
+.jarvis-ring-outer {
+  animation: jarvis-rotate-clockwise 24s linear infinite;
+}
+
+.jarvis-ring-middle {
+  animation: jarvis-rotate-counter 16s linear infinite;
+}
+
+.jarvis-ring-inner {
+  animation: jarvis-rotate-clockwise 10s linear infinite;
+}
+
+.jarvis-core-pulse {
+  animation: jarvis-pulse-glow 3s ease-in-out infinite;
+}
+
+.jarvis-listening-ring {
+  animation: jarvis-listening-pulse 1.8s infinite;
+}
+
+.jarvis-glitch-border {
+  border-image: linear-gradient(135deg, rgba(6, 182, 212, 0.6), rgba(59, 130, 246, 0.2), rgba(6, 182, 212, 0.8)) 1;
+}
