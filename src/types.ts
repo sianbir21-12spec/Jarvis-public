@@ -16,6 +16,22 @@ export interface AttachedFile {
   content: string;
 }
 
+// A file the assistant produced from its own response (code block, document,
+// data, etc.) that the user can download. Generated client-side for plain
+// text/code, or via /api/files/generate on the server for binary formats
+// (.docx / .xlsx / .pdf) that need a real writer library.
+export interface GeneratedFile {
+  id: string;
+  filename: string;
+  mimeType: string;
+  // Present for text-based files generated entirely in the browser.
+  content?: string;
+  // Present once a server-generated binary file has been fetched, as a
+  // blob: URL ready to hand to an <a download> link.
+  blobUrl?: string;
+  format: 'text' | 'docx' | 'xlsx' | 'pdf';
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -49,6 +65,8 @@ export interface AppSettings {
   enterToSend: boolean;
   streamingEnabled: boolean;
   soundEffects: boolean;
+  theme: 'dark' | 'light';
+  notificationsEnabled: boolean;
 }
 
 export interface CommandExecutionResult {

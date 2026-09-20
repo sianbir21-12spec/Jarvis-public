@@ -1,9 +1,11 @@
 import React from 'react';
 import { GatewayHealth, WebpageContext } from '../types';
-import { Wifi, WifiOff, Cpu, Volume2, VolumeX, FileText, Settings as SettingsIcon, Menu, Code2, MonitorCog, TerminalSquare } from 'lucide-react';
+import { Wifi, WifiOff, Cpu, Volume2, VolumeX, FileText, Settings as SettingsIcon, Menu, Code2, MonitorCog, TerminalSquare, Sun, Moon, BarChart3 } from 'lucide-react';
 
 interface StatusIndicatorProps {
   health: GatewayHealth;
+  theme: 'dark' | 'light';
+  onToggleTheme: () => void;
   voiceEnabled: boolean;
   onToggleVoice: () => void;
   onOpenSettings: () => void;
@@ -13,10 +15,13 @@ interface StatusIndicatorProps {
   onOpenCodeExplainer?: () => void;
   onOpenAgentPanel?: () => void;
   onOpenTerminal?: () => void;
+  onOpenDashboard?: () => void;
 }
 
 export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
   health,
+  theme,
+  onToggleTheme,
   voiceEnabled,
   onToggleVoice,
   onOpenSettings,
@@ -25,7 +30,8 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
   activeContext,
   onOpenCodeExplainer,
   onOpenAgentPanel,
-  onOpenTerminal
+  onOpenTerminal,
+  onOpenDashboard
 }) => {
   const isOnline = health.status === 'online';
 
@@ -124,6 +130,19 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
           </button>
         )}
 
+        {/* Usage Dashboard */}
+        {onOpenDashboard && (
+          <button
+            id="btn-open-dashboard"
+            onClick={onOpenDashboard}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono border transition-all text-slate-400 hover:text-cyan-300 hover:bg-cyan-950/30 border-cyan-500/20"
+            title="Open Usage Dashboard"
+          >
+            <BarChart3 className="w-4 h-4 text-cyan-400" />
+            <span className="hidden lg:inline">Dashboard</span>
+          </button>
+        )}
+
         {/* Code Explainer Quick Access */}
         {onOpenCodeExplainer && (
           <button
@@ -174,6 +193,17 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
               <span className="hidden sm:inline">VOICE: OFF</span>
             </>
           )}
+        </button>
+
+        {/* Theme toggle */}
+        <button
+          id="btn-toggle-theme"
+          onClick={onToggleTheme}
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-400 hover:bg-cyan-950/40 border border-transparent hover:border-cyan-500/30 transition-colors"
+        >
+          {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
         </button>
 
         {/* Settings button */}

@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { OMNIROUTE_CONFIG } from './omniroute.js';
+import { getConfig } from './runtimeConfig.js';
 
 function extensionForMime(mimeType: string): string {
   if (mimeType.includes('ogg')) return 'ogg';
@@ -14,7 +15,7 @@ async function transcribeViaOmniRoute(buffer: Buffer, mimeType: string): Promise
   const form = new FormData();
   const bytes = new Uint8Array(buffer); // copies into a plain ArrayBuffer-backed view, avoiding the SharedArrayBuffer typing mismatch
   form.append('file', new Blob([bytes], { type: mimeType }), `speech.${ext}`);
-  form.append('model', process.env.OMNIROUTE_STT_MODEL || 'whisper-1');
+  form.append('model', getConfig('OMNIROUTE_STT_MODEL'));
 
   const res = await fetch(`${OMNIROUTE_CONFIG.baseUrl}/v1/audio/transcriptions`, {
     method: 'POST',
@@ -34,14 +35,14 @@ async function transcribeViaOmniRoute(buffer: Buffer, mimeType: string): Promise
 }
 
 async function transcribeViaGemini(buffer: Buffer, mimeType: string): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getConfig('GEMINI_API_KEY');
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not set');
+    throw new Error('Gemini API key is not set');
   }
 
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
-    model: process.env.GEMINI_STT_MODEL || 'gemini-3.6-flash',
+    model: getConfig('GEMINI_STT_MODEL'),
     contents: [
       {
         role: 'user',
@@ -68,7 +69,7 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string): Promise
     errors.push(err?.message || 'OmniRoute STT failed');
   }
 
-  if (process.env.GEMINI_API_KEY) {
+  if (getConfig('GEMINI_API_KEY')) {
     try {
       const text = await transcribeViaGemini(buffer, mimeType);
       return { text, engine: 'gemini' };
@@ -80,7 +81,7 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string): Promise
   throw {
     status: 502,
     message:
-      'Speech transcription is not available. OmniRoute did not accept Whisper audio. Add GEMINI_API_KEY to .env (recommended for Electron voice), or use Chrome at http://localhost:3000. ' +
+      'Speech transcription is not available. OmniRoute did not accept Whisper audio. Add a Gemini API key in Settings -> AI Gateway & Keys (recommended for Electron voice), or use Chrome at http://localhost:3000. ' +
       errors.join(' | ')
   };
 }

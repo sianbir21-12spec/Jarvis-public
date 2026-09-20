@@ -215,5 +215,29 @@ export const apiService = {
       throw new Error(data.error || 'Speech transcription failed.');
     }
     return data.text || '';
+  },
+
+  /**
+   * Sends a document (docx/pdf/xlsx/xls/csv) to the backend and returns its
+   * extracted plain text. Browsers can't parse these formats natively, so
+   * this is what lets attached documents actually be readable in chat
+   * instead of showing up as "[Binary file -- content not extracted]".
+   */
+  async extractFileText(file: File): Promise<{ text: string; truncated: boolean }> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+
+    const res = await fetch('/api/files/extract', {
+      method: 'POST',
+      body: form
+    });
+
+    const data: any = await res.json().catch(() => null);
+
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.error || `Extraction failed (${res.status}).`);
+    }
+
+    return { text: data.text as string, truncated: !!data.truncated };
   }
 };

@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { getConfig } from './runtimeConfig.js';
 dotenv.config();
 
 export interface OmniRouteMessage {
@@ -16,21 +17,22 @@ export interface OmniRouteChatOptions {
 
 export const OMNIROUTE_CONFIG = {
   get apiKey(): string {
-    const key = process.env.OMNIROUTE_API_KEY;
+    const key = getConfig('OMNIROUTE_API_KEY');
     if (!key) {
       throw {
         status: 500,
-        message: 'OMNIROUTE_API_KEY is not configured on the server. Set it in your .env file.'
+        message:
+          'OmniRoute API key is not configured. Open Settings -> AI Gateway & Keys and paste your OmniRoute API key.'
       };
     }
     return key;
   },
   get baseUrl(): string {
-    const raw = process.env.OMNIROUTE_BASE_URL || 'https://omnirouuter.zeabur.app';
+    const raw = getConfig('OMNIROUTE_BASE_URL');
     return raw.replace(/\/+$/, '');
   },
   get defaultModel(): string {
-    return process.env.OMNIROUTE_MODEL || 'SIAN';
+    return getConfig('OMNIROUTE_MODEL');
   }
 };
 

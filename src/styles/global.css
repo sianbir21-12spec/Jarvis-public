@@ -1,24 +1,39 @@
 @import "tailwindcss";
 
-:root {
+:root,
+:root[data-theme="dark"] {
   --jarvis-cyan: #06b6d4;
   --jarvis-blue: #0ea5e9;
   --jarvis-dark: #050811;
   --jarvis-panel: rgba(8, 14, 26, 0.75);
+  --jarvis-bg: #040711;
+  --jarvis-text: #e2e8f0;
+  --jarvis-grid-line: rgba(6, 182, 212, 0.03);
+}
+
+:root[data-theme="light"] {
+  --jarvis-cyan: #0891b2;
+  --jarvis-blue: #0369a1;
+  --jarvis-dark: #f8fafc;
+  --jarvis-panel: rgba(255, 255, 255, 0.85);
+  --jarvis-bg: #f1f5f9;
+  --jarvis-text: #0f172a;
+  --jarvis-grid-line: rgba(8, 145, 178, 0.05);
 }
 
 body {
-  background-color: #040711;
-  color: #e2e8f0;
+  background-color: var(--jarvis-bg);
+  color: var(--jarvis-text);
   font-family: 'Chakra Petch', system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* Futuristic background grid */
 .cyber-grid {
   background-image: 
-    linear-gradient(to right, rgba(6, 182, 212, 0.03) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(6, 182, 212, 0.03) 1px, transparent 1px);
+    linear-gradient(to right, var(--jarvis-grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--jarvis-grid-line) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 
@@ -44,4 +59,100 @@ body {
 
 .hud-glow-red {
   box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+}
+
+/* ---------------------------------------------------------------------
+   Light mode overrides.
+   The UI is built with hardcoded Tailwind slate/cyan "dark mode" utility
+   classes throughout (bg-slate-950, border-slate-800, etc.) rather than
+   theme tokens, so converting every component individually isn't
+   practical here. This block re-targets every slate/cyan/black/white
+   utility class that actually appears across the app (audited via
+   `grep -roh` over src/components) so the toggle has a real, app-wide
+   effect. If a newly added component uses a slate/dark utility class not
+   listed here, add its selector to this block.
+   --------------------------------------------------------------------- */
+:root[data-theme="light"] {
+  /* Page / panel backgrounds -- darkest first so more specific opacity
+     variants aren't clobbered by a later, broader rule. */
+  .bg-slate-950,
+  .bg-slate-950\/70,
+  .bg-slate-950\/80,
+  .bg-slate-950\/90,
+  .bg-slate-950\/95,
+  .bg-slate-900,
+  .bg-slate-900\/40,
+  .bg-slate-900\/50,
+  .bg-slate-900\/60,
+  .bg-slate-900\/70,
+  .bg-slate-900\/80,
+  .bg-slate-900\/95,
+  .bg-slate-800,
+  .bg-slate-800\/60,
+  .bg-slate-700,
+  .bg-\[\#040711\] {
+    background-color: #f8fafc !important;
+  }
+
+  /* Dark translucent scrims (modal backdrops) stay dark-ish but lighter,
+     since they sit over the whole viewport regardless of theme. */
+  .bg-black\/40,
+  .bg-black\/60,
+  .bg-black\/70,
+  .bg-black\/80 {
+    background-color: rgba(15, 23, 42, 0.4) !important;
+  }
+
+  /* Cyan-tinted dark panel backgrounds -> soft cyan-tinted light panels. */
+  .bg-cyan-950,
+  .bg-cyan-950\/30,
+  .bg-cyan-950\/40,
+  .bg-cyan-950\/50,
+  .bg-cyan-950\/60,
+  .bg-cyan-950\/80,
+  .bg-cyan-900\/60 {
+    background-color: #e0f2fe !important;
+  }
+
+  /* Borders */
+  .border-slate-800,
+  .border-slate-700,
+  .border-slate-600 {
+    border-color: #e2e8f0 !important;
+  }
+  .border-cyan-500\/10,
+  .border-cyan-500\/20,
+  .border-cyan-500\/25,
+  .border-cyan-500\/30,
+  .border-cyan-500\/40,
+  .border-cyan-500\/50,
+  .border-cyan-500\/60,
+  .border-cyan-400\/40,
+  .border-cyan-400\/60,
+  .border-cyan-400\/80 {
+    border-color: rgba(8, 145, 178, 0.35) !important;
+  }
+
+  /* Body text -- light-on-dark greys/whites need to become dark-on-light. */
+  .text-white,
+  .text-slate-100,
+  .text-slate-200 {
+    color: #0f172a !important;
+  }
+  .text-slate-300,
+  .text-slate-400 {
+    color: #475569 !important;
+  }
+  .text-slate-500 {
+    color: #64748b !important;
+  }
+
+  /* Cyan text stays legible on light backgrounds, but the very pale
+     variants (meant for dark bg) need to darken for contrast. */
+  .text-cyan-100,
+  .text-cyan-200,
+  .text-cyan-300,
+  .text-cyan-300\/80 {
+    color: #0e7490 !important;
+  }
 }

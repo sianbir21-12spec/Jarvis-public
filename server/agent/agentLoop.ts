@@ -20,9 +20,13 @@
 //   Previously a slow/hung gateway response just looked like the agent
 //   silently freezing forever with no feedback.
 
+import { getConfig } from '../runtimeConfig.js';
 import { OMNIROUTE_CONFIG } from '../omniroute.js';
-import { TOOLS, dispatchTool } from '../tools/toolDefinitions.js';
+import { TOOLS, dispatchTool, isDestructive } from '../tools/toolDefinitions.js';
+import type { ScreenshotAnnotation } from '../tools/registry.js';
 import { isComputerControlEnabled } from '../state/computerControlState.js';
+import { renderMemoryForPrompt } from '../memory/memoryStore.js';
+import { logUsageEvent } from '../state/usage.js';
 
 // Lower than before, deliberately: combined with the "batch actions per
 // turn" prompt guidance, a tighter budget pushes the model toward fewer,
@@ -36,13 +40,18 @@ const KEEP_LAST_N_SCREENSHOTS = 1;
 // Lets the agent loop use a different (e.g. faster/cheaper) model than
 // regular chat, via OmniRoute's catalog. Falls back to the normal default
 // model if unset, so this is a no-op unless explicitly configured.
-const AGENT_MODEL = process.env.AGENT_MODEL || OMNIROUTE_CONFIG.defaultModel;
+// Resolved per call, not at module load, so changing the model in Settings
+// takes effect without restarting the backend process.
+function agentModel(): string {
+  return getConfig('AGENT_MODEL') || OMNIROUTE_CONFIG.defaultModel;
+}
 
 export type AgentEvent =
   | { type: 'status'; message: string }
   | { type: 'assistant_text'; text: string }
   | { type: 'tool_call'; name: string; args: any; step: number }
-  | { type: 'tool_result'; name: string; text: string; screenshot?: string; step: number }
+  | { type: 'tool_result'; name: string; text: string; screenshot?: string; screenshotWidth?: number; screenshotHeight?: number; annotations?: ScreenshotAnnotation[]; step: number }
+  | { type: 'confirm_required'; name: string; args: any; step: number }
   | { type: 'done'; summary: string }
   | { type: 'error'; message: string };
 
@@ -55,15 +64,30 @@ Operating rules:
 - In the browser, ALWAYS try browser_get_interactive_elements + browser_click_selector/browser_type_selector FIRST -- it needs no screenshot and no vision call, so it's much faster than the screenshot+coordinates path. Only fall back to browser_screenshot + coordinates if there's genuinely no usable selector.
 - Batch independent actions into a single turn when you can (e.g. click a field AND type into it, or several keypresses in a row) -- each turn is a full round-trip to the model, so fewer, bigger turns finish the task faster than many small ones.
 - If something on screen doesn't match your expectation, stop and re-assess with a fresh screenshot rather than repeating the same action.
-- You have full autonomy: do not ask the user for confirmation before acting. Just proceed.
+- You have full autonomy: do not ask the user for confirmation in your own text before acting. Just proceed. (A small set of destructive actions -- deleting/overwriting files, running a destructive terminal command -- pause automatically for the user's approval; that's handled outside your control. If one comes back declined, don't retry it verbatim -- ask what to do instead or pick a different approach.)
 - Call task_complete as soon as the task is verifiably done -- don't take extra confirming screenshots once you're confident. This includes simple tasks (e.g. "open the start menu") -- once the action is done, call task_complete immediately rather than continuing to observe.
 - If a task is genuinely impossible, ambiguous to a blocking degree, or you get stuck after several attempts, call task_complete and explain why.
-- Keep any prose you send back short -- most of your turns should just be tool calls.`;
+- Keep any prose you send back short -- most of your turns should just be tool calls.
+- Use memory_remember when you learn a durable fact worth keeping for future sessions (a stated preference, a recurring detail about the user's setup) -- not for one-off details that only matter for this task. Use memory_recall if you need to check what's already known before asking the user something they may have told you before.`;
+
+// Rebuilt per run (not cached) so a memory saved moments ago -- including
+// by memory_remember earlier in the same session -- is reflected the next
+// time this is called; the block is appended once at session start, which
+// is enough for its purpose (background context, not live lookup).
+function buildSystemPrompt(): string {
+  const memoryBlock = renderMemoryForPrompt();
+  return memoryBlock ? `${SYSTEM_PROMPT}\n\n${memoryBlock}` : SYSTEM_PROMPT;
+}
 
 interface RunAgentOptions {
   task: string;
   signal: AbortSignal;
   onEvent: (event: AgentEvent) => void;
+  // Called when a tool flagged `destructive` in the registry is about to
+  // run. Resolves true/false once the user approves or denies (or the
+  // session is aborted/disconnected, which the caller should resolve as
+  // false rather than leaving this hanging forever).
+  onConfirmRequired: (name: string, args: any, step: number) => Promise<boolean>;
 }
 
 // Replaces image_url parts in all but the most recent `keepLastN`
@@ -106,7 +130,7 @@ async function callGateway(messages: any[], outerSignal: AbortSignal): Promise<a
         Authorization: `Bearer ${OMNIROUTE_CONFIG.apiKey}`
       },
       body: JSON.stringify({
-        model: AGENT_MODEL,
+        model: agentModel(),
         messages,
         tools: TOOLS,
         tool_choice: 'auto',
@@ -153,7 +177,7 @@ export async function warmGatewayConnection(): Promise<void> {
         Authorization: `Bearer ${OMNIROUTE_CONFIG.apiKey}`
       },
       body: JSON.stringify({
-        model: AGENT_MODEL,
+        model: agentModel(),
         messages: [{ role: 'user', content: 'ping' }],
         max_tokens: 1,
         stream: false
@@ -165,9 +189,18 @@ export async function warmGatewayConnection(): Promise<void> {
   }
 }
 
-export async function runAgent({ task, signal, onEvent }: RunAgentOptions): Promise<void> {
+export async function runAgent({ task, signal, onEvent, onConfirmRequired }: RunAgentOptions): Promise<void> {
+  const runStart = Date.now();
+  // Wraps onEvent for the loop's terminal events ('done'/'error') so every
+  // exit path logs exactly one agent_run usage event, regardless of which
+  // of the several return points below it took.
+  const finish = (event: AgentEvent) => {
+    logUsageEvent({ type: 'agent_run', latencyMs: Date.now() - runStart });
+    onEvent(event);
+  };
+
   const messages: any[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: buildSystemPrompt() },
     { role: 'user', content: `Task: ${task}\n\nStart by taking a screenshot to see the current screen.` }
   ];
 
@@ -192,14 +225,14 @@ export async function runAgent({ task, signal, onEvent }: RunAgentOptions): Prom
         onEvent({ type: 'status', message: 'Stopped by user.' });
         return;
       }
-      onEvent({ type: 'error', message: err.message || 'Gateway request failed.' });
+      finish({ type: 'error', message: err.message || 'Gateway request failed.' });
       return;
     }
 
     const choice = data.choices?.[0];
     const message = choice?.message;
     if (!message) {
-      onEvent({ type: 'error', message: 'Gateway returned no message.' });
+      finish({ type: 'error', message: 'Gateway returned no message.' });
       return;
     }
 
@@ -209,7 +242,7 @@ export async function runAgent({ task, signal, onEvent }: RunAgentOptions): Prom
       // Model responded with plain text and no tool calls -- treat as final.
       const text = message.content || '';
       if (text) onEvent({ type: 'assistant_text', text });
-      onEvent({ type: 'done', summary: text || 'Agent finished.' });
+      finish({ type: 'done', summary: text || 'Agent finished.' });
       return;
     }
 
@@ -235,10 +268,27 @@ export async function runAgent({ task, signal, onEvent }: RunAgentOptions): Prom
       const name = call.function?.name || 'unknown';
 
       onEvent({ type: 'tool_call', name, args, step });
+      logUsageEvent({ type: 'tool_call', tool: name });
 
       let result;
       try {
-        result = await dispatchTool(name, args);
+        if (isDestructive(name, args)) {
+          onEvent({ type: 'confirm_required', name, args, step });
+          const approved = await onConfirmRequired(name, args, step);
+
+          if (signal.aborted) {
+            onEvent({ type: 'status', message: 'Stopped by user.' });
+            return;
+          }
+
+          result = approved
+            ? await dispatchTool(name, args)
+            : {
+                text: `User declined to run "${name}". Do not retry it verbatim -- ask what to do instead or pick a different approach.`
+              };
+        } else {
+          result = await dispatchTool(name, args);
+        }
       } catch (err: any) {
         result = { text: `Error running ${name}: ${err.message || err}` };
       }
@@ -248,6 +298,9 @@ export async function runAgent({ task, signal, onEvent }: RunAgentOptions): Prom
         name,
         text: result.text,
         screenshot: result.screenshot?.base64,
+        screenshotWidth: result.screenshot?.width,
+        screenshotHeight: result.screenshot?.height,
+        annotations: result.annotations,
         step
       });
 
@@ -273,11 +326,11 @@ export async function runAgent({ task, signal, onEvent }: RunAgentOptions): Prom
       }
 
       if (result.isTaskComplete) {
-        onEvent({ type: 'done', summary: result.text });
+        finish({ type: 'done', summary: result.text });
         return;
       }
     }
   }
 
-  onEvent({ type: 'error', message: `Stopped after reaching the ${MAX_STEPS}-step safety limit.` });
+  finish({ type: 'error', message: `Stopped after reaching the ${MAX_STEPS}-step safety limit.` });
 }

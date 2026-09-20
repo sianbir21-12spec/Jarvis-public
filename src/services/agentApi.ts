@@ -1,8 +1,26 @@
+export interface ScreenshotAnnotation {
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+  label: string;
+}
+
 export type AgentEvent =
   | { type: 'status'; message: string }
   | { type: 'assistant_text'; text: string }
   | { type: 'tool_call'; name: string; args: any; step: number }
-  | { type: 'tool_result'; name: string; text: string; screenshot?: string; step: number }
+  | {
+      type: 'tool_result';
+      name: string;
+      text: string;
+      screenshot?: string;
+      screenshotWidth?: number;
+      screenshotHeight?: number;
+      annotations?: ScreenshotAnnotation[];
+      step: number;
+    }
+  | { type: 'confirm_required'; name: string; args: any; step: number }
   | { type: 'done'; summary: string }
   | { type: 'error'; message: string };
 
@@ -79,6 +97,16 @@ export const agentApiService = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId })
+    }).catch(() => {});
+  },
+
+  // Approves or denies a pending destructive-action pause (`confirm_required`
+  // event) for the given session.
+  async confirmAction(sessionId: string, approved: boolean): Promise<void> {
+    await fetch('/api/agent/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, approved })
     }).catch(() => {});
   }
 };

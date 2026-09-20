@@ -1,13 +1,32 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { createExpressApp } from './server/index.ts';
+import { createExpressApp } from './server/index.js';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/**
+ * This file is run two different ways:
+ *   dev         -> tsx (ESM), where import.meta.url is defined
+ *   production  -> bundled by esbuild to CJS (dist/server.cjs), where
+ *                  import.meta is empty and __dirname already exists
+ *
+ * Reading import.meta.url unconditionally made the packaged build crash on
+ * startup: fileURLToPath(undefined) throws before the server ever listens,
+ * so the Electron window just hung on the splash screen waiting for a
+ * backend that had already died.
+ */
+declare const __dirname: string | undefined;
+
+const HERE: string = (() => {
+  // CJS bundle: __dirname is injected by the bundler/runtime.
+  if (typeof __dirname === 'string') return __dirname;
+  // ESM (tsx dev): derive it from the module URL.
+  // @ts-ignore -- import.meta is only valid in the ESM path
+  return path.dirname(fileURLToPath(import.meta.url));
+})();
 
 async function startServer() {
   const app = createExpressApp();
@@ -24,9 +43,22 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
+    // The bundle lives at <root>/dist/server.cjs and Vite emits index.html
+    // into that same <root>/dist folder, so the static root is HERE itself.
+    // The previous path.join(HERE, 'dist') resolved to <root>/dist/dist,
+    // which does not exist -- every page load returned a 404 and the app
+    // rendered a blank window.
+    const candidates = [HERE, path.join(HERE, 'dist'), path.join(HERE, '..', 'dist')];
+    const distPath = candidates.find((dir) => fs.existsSync(path.join(dir, 'index.html'))) || HERE;
+
+    console.log(`[JARVIS System Core] Serving static assets from ${distPath}`);
+
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+
+    // SPA fallback -- but never swallow unmatched /api/* requests, which
+    // should return a JSON 404 instead of the HTML shell.
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api/')) return next();
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

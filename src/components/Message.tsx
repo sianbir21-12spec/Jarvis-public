@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { ChatMessage } from '../types';
-import { Copy, Check, Volume2, VolumeX, RotateCcw, User, Cpu, AlertCircle, FileText, Sparkles } from 'lucide-react';
+import { Copy, Check, Volume2, VolumeX, RotateCcw, User, Cpu, AlertCircle, FileText, Sparkles, Download, Loader2 } from 'lucide-react';
+import { fileGenService, ExportFormat } from '../services/fileGen';
 
 interface MessageProps {
   message: ChatMessage;
@@ -21,6 +22,9 @@ export const Message: React.FC<MessageProps> = ({
   onExplainCode
 }) => {
   const [copied, setCopied] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const isUser = message.role === 'user';
   const isError = message.error;
 
@@ -29,6 +33,28 @@ export const Message: React.FC<MessageProps> = ({
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const handleExport = async (format: ExportFormat) => {
+    setExportMenuOpen(false);
+    setExportError(null);
+    setExporting(format);
+    try {
+      await fileGenService.exportAs(format, message.content, fileGenService.suggestFilename(message.content));
+    } catch (err: any) {
+      setExportError(err?.message || `Failed to export as ${format.toUpperCase()}.`);
+      setTimeout(() => setExportError(null), 4000);
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const EXPORT_OPTIONS: { format: ExportFormat; label: string }[] = [
+    { format: 'md', label: 'Markdown (.md)' },
+    { format: 'txt', label: 'Plain Text (.txt)' },
+    { format: 'docx', label: 'Word (.docx)' },
+    { format: 'pdf', label: 'PDF (.pdf)' },
+    { format: 'xlsx', label: 'Excel (.xlsx)' }
+  ];
 
   const formattedTime = new Date(message.timestamp).toLocaleTimeString([], {
     hour: '2-digit',
@@ -89,6 +115,48 @@ export const Message: React.FC<MessageProps> = ({
               >
                 {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
               </button>
+
+              {/* Export / Save as file */}
+              {!isUser && !isError && (
+                <div className="relative">
+                  <button
+                    onClick={() => setExportMenuOpen((v) => !v)}
+                    title="Save Response as File"
+                    disabled={exporting !== null}
+                    className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-slate-800/60 transition-colors disabled:opacity-50"
+                  >
+                    {exporting ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Download className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+
+                  {exportMenuOpen && (
+                    <>
+                      {/* Backdrop to close on outside click */}
+                      <div className="fixed inset-0 z-10" onClick={() => setExportMenuOpen(false)} />
+                      <div className="absolute right-0 mt-1 z-20 w-40 rounded-lg border border-cyan-500/20 bg-slate-950/95 backdrop-blur-md shadow-xl py-1">
+                        {EXPORT_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.format}
+                            onClick={() => handleExport(opt.format)}
+                            className="w-full text-left px-3 py-1.5 text-xs font-mono text-slate-300 hover:text-cyan-300 hover:bg-cyan-950/40 transition-colors"
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {exportError && (
+                    <div className="absolute right-0 mt-1 z-20 w-48 rounded-lg border border-red-500/30 bg-red-950/90 px-2 py-1.5 text-[11px] font-mono text-red-300">
+                      {exportError}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Speak / Vocalize */}
               {!isUser && !isError && onSpeak && (

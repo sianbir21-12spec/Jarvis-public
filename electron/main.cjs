@@ -68,7 +68,20 @@ function waitForServer(timeoutMs = 25000) {
 function startServerProcess() {
   const serverPath = path.join(__dirname, '..', 'dist', 'server.cjs');
   serverProcess = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, PORT: String(PORT), NODE_ENV: 'production' },
+    env: {
+      ...process.env,
+      PORT: String(PORT),
+      NODE_ENV: 'production',
+      // Where the backend persists user-entered API keys / gateway settings.
+      JARVIS_CONFIG_DIR: app.getPath('userData'),
+      // CRITICAL: process.execPath in a packaged app is the Electron binary
+      // itself (JARVIS.exe), not a plain node.exe. Without this flag,
+      // spawning it with a script path just launches a second copy of the
+      // Electron GUI pointed at dist/server.cjs as if it were an app folder
+      // -- which isn't one, so it exits instantly with no output at all.
+      // This env var tells Electron's binary to behave as plain Node instead.
+      ELECTRON_RUN_AS_NODE: '1'
+    },
     stdio: 'inherit'
   });
   serverProcess.on('error', (err) => {

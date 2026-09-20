@@ -1,6 +1,8 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { fetchOmniRouteChat, validateMessages, OMNIROUTE_CONFIG } from '../omniroute.js';
 import { transcribeAudio } from '../transcribe.js';
+import { renderMemoryForPrompt } from '../memory/memoryStore.js';
+import { logUsageEvent } from '../state/usage.js';
 
 export const chatRouter = Router();
 
@@ -62,6 +64,7 @@ chatRouter.get('/health', async (req: Request, res: Response) => {
  */
 chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction) => {
   const abortController = new AbortController();
+  const requestStart = Date.now();
 
   req.on('close', () => {
     abortController.abort();
@@ -79,6 +82,22 @@ chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction)
       }
     }
 
+    // Splice long-term memory into the system message so it's available on
+    // every chat turn, not just agent runs. Appended to whatever system
+    // message is already first (client-provided or the one just added
+    // above); a fresh one is created only if there's none at all.
+    const memoryBlock = renderMemoryForPrompt();
+    if (memoryBlock) {
+      if (validated[0]?.role === 'system') {
+        validated = [
+          { ...validated[0], content: `${validated[0].content}\n\n${memoryBlock}` },
+          ...validated.slice(1)
+        ];
+      } else {
+        validated = [{ role: 'system', content: memoryBlock }, ...validated];
+      }
+    }
+
     if (!stream) {
       // Non-streaming completion
       const gatewayResponse = await fetchOmniRouteChat({
@@ -91,6 +110,7 @@ chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction)
 
       const data: any = await gatewayResponse.json();
       const assistantContent = data.choices?.[0]?.message?.content || '';
+      logUsageEvent({ type: 'chat_message', latencyMs: Date.now() - requestStart });
       return res.json({
         content: assistantContent,
         model: data.model || model || OMNIROUTE_CONFIG.defaultModel,
@@ -175,6 +195,7 @@ chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction)
       }
     }
 
+    logUsageEvent({ type: 'chat_message', latencyMs: Date.now() - requestStart });
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (err) {

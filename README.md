@@ -4,6 +4,30 @@ JARVIS is a production-grade, standalone web application that replicates the int
 
 ---
 
+## Changelog — fixes applied
+
+**1. Light/dark theme was mostly broken.**
+`src/styles/global.css` had a manual override block for light mode that only patched a handful of the dark-only Tailwind utility classes actually used across the app (`bg-slate-950`, `text-slate-300`, etc.), so toggling to light mode left most panels — including the main app background (`bg-[#040711]` in `src/App.tsx`, which wasn't covered at all) — stuck dark.
+*Fix:* audited every `bg-`/`border-`/`text-` slate/cyan/black/white class used in `src/components/*.tsx` and expanded the `:root[data-theme="light"]` block to cover all of them; added the missing root-background selector.
+
+**2. Packaged desktop build's backend couldn't start.**
+`package.json`'s `build.files` for electron-builder only listed `dist/**/*`, `electron/**/*`, and `package.json` — `node_modules` was never included. But the server build (`esbuild --packages=external`) keeps all dependencies (`express`, `mammoth`, `pdf-parse`, `xlsx`, `pdfkit`, `docx`, `adm-zip`, `multer`, `@google/genai`, etc.) external, so the packaged app's compiled server still does `require('express')` etc. at runtime — and those packages were never shipped. This broke chat and file extraction in the built `.exe`/`.dmg`, since `asarUnpack` was already configured for `node_modules/@nut-tree-fork/**` etc., strongly suggesting `node_modules` inclusion was intended but accidentally dropped.
+*Fix:* added `node_modules/**/*` (with a few size-reducing excludes) to `build.files`.
+
+**3. Model fabricates fake code-execution transcripts for file attachments.**
+When a zip (or other document) was attached, the model sometimes responded with a fabricated "PYTHON — Explain / Copy" block pretending to read a `files` dictionary and run `zipfile.extractall()`, then claimed it "didn't see" the file. There is no code-execution sandbox anywhere in this app — `server/routes/files.ts` already extracts zip/docx/pdf/xlsx contents server-side and `src/App.tsx` embeds that text directly into the user's message under an `[ATTACHED FILES]:` heading before it ever reaches the model. The old system prompt said "never fabricate capabilities" but never said which capabilities don't exist, so the model filled that gap with a plausible-looking fake tool call.
+*Fix:* `DEFAULT_SYSTEM_PROMPT` in `src/services/storage.ts` now explicitly states there is no code-execution environment or `files` variable, and instructs the model to read attachment content directly from the `[ATTACHED FILES]:` section already present in the message.
+**Note:** this only changes the default — if you already have settings saved, use **Settings → System Prompt → Reset to Default** in the app to pick it up.
+
+To rebuild after pulling these changes:
+```bash
+npm install
+npm run build
+npm run dist        # or npm run build:win
+```
+
+---
+
 ## 1. Requirements
 
 - **Node.js**: v18.0.0 or higher (v20+ recommended)

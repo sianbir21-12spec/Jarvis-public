@@ -2,7 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AppSettings, GatewayHealth } from '../types';
 import { DEFAULT_SYSTEM_PROMPT } from '../services/storage';
 import { voiceService } from '../services/voice';
+import { notificationService } from '../services/notifications';
 import { apiService } from '../services/api';
+import { CredentialsSection } from './CredentialsSection';
+import { MemorySection } from './MemorySection';
 import { 
   Settings as SettingsIcon, 
   X, 
@@ -290,9 +293,15 @@ export const Settings: React.FC<SettingsProps> = ({
             <ShieldCheck className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5" />
             <div className="text-xs font-mono text-slate-300">
               <span className="text-cyan-300 font-semibold block mb-0.5">Secure Gateway Isolation</span>
-              API keys are secured exclusively in backend server memory. The frontend never accesses or exposes the authorization token.
+              API keys are stored by the backend in a local per-user config file. The interface only ever sees a masked preview, never the full token.
             </div>
           </div>
+
+          {/* Section 0: Credentials (OmniRoute + Gemini) */}
+          <CredentialsSection />
+
+          {/* Section 0.5: Long-term memory */}
+          <MemorySection />
 
           {/* Section 1: AI Model & OmniRoute */}
           <div className="space-y-4">
@@ -410,6 +419,25 @@ export const Settings: React.FC<SettingsProps> = ({
                   className="rounded accent-cyan-500"
                 />
                 <span>Enter key sends directive</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-slate-300 select-none">
+                <input
+                  type="checkbox"
+                  checked={formData.notificationsEnabled}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setFormData({ ...formData, notificationsEnabled: enabled });
+                    if (enabled) notificationService.requestPermission();
+                  }}
+                  className="rounded accent-cyan-500"
+                />
+                <span>
+                  Push notifications
+                  {notificationService.getPermission() === 'denied' && (
+                    <span className="text-amber-400 ml-1">(blocked in browser)</span>
+                  )}
+                </span>
               </label>
             </div>
           </div>

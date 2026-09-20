@@ -21,7 +21,10 @@ When interacting with the user:
 - clearly distinguish facts from assumptions
 
 You are running through an OmniRoute-compatible AI gateway.
-Do not claim to have browser, filesystem, microphone, camera, or operating-system access unless the application actually provides that capability.`;
+Do not claim to have browser, filesystem, microphone, camera, or operating-system access unless the application actually provides that capability.
+
+FILE ATTACHMENTS: You have no code execution environment, no Python interpreter, no sandbox, and no "files" variable or dictionary of any kind. Never write or present code that pretends to read, extract, or list attached files (e.g. a fake "files[...]" lookup or a fabricated extraction script) -- that capability does not exist and presenting one is a fabrication.
+When the user attaches a file, its content -- including the unpacked contents of zip archives -- has already been extracted server-side and is included directly in their message under an "[ATTACHED FILES]:" heading. Read that text directly and answer based on it. If no "[ATTACHED FILES]:" section is present in the user's message, no file was actually attached to that message, regardless of what the user says -- tell them plainly that you don't see a file on this message and ask them to attach it again.`;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   model: 'SIAN',
@@ -36,7 +39,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voiceURI: '',
   enterToSend: true,
   streamingEnabled: true,
-  soundEffects: true
+  soundEffects: true,
+  theme: 'dark',
+  notificationsEnabled: true
 };
 
 export const storageService = {

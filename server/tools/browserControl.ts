@@ -93,7 +93,7 @@ export async function reload() {
   await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
 }
 
-export async function screenshot(maxWidth = 1280): Promise<{ base64: string; width: number; height: number }> {
+export async function screenshot(maxWidth = 1280): Promise<{ base64: string; width: number; height: number; scale: number }> {
   const page = await activePage();
   const buffer = await page.screenshot({ type: 'jpeg', quality: 75 });
   const sharp = (await import('sharp')).default;
@@ -102,7 +102,11 @@ export async function screenshot(maxWidth = 1280): Promise<{ base64: string; wid
   const scale = width > maxWidth ? maxWidth / width : 1;
   const resized = scale < 1 ? await sharp(buffer).resize(Math.round(width * scale)).jpeg({ quality: 75 }).toBuffer() : buffer;
   const outMeta = await sharp(resized).metadata();
-  return { base64: resized.toString('base64'), width: outMeta.width || width, height: outMeta.height || 0 };
+  // `scale` is exposed so callers that measured an element's bounding box
+  // in the page's own (pre-resize) pixel space -- e.g. clickSelector's
+  // boundingBox() -- can convert it into this screenshot's pixel space for
+  // annotation purposes. 1 when the page wasn't downscaled.
+  return { base64: resized.toString('base64'), width: outMeta.width || width, height: outMeta.height || 0, scale };
 }
 
 export async function clickSelector(selector: string): Promise<void> {

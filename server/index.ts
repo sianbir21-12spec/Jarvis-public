@@ -4,6 +4,10 @@ import { chatRouter } from './routes/chat.js';
 import { agentRouter } from './routes/agent.js';
 import { computerControlRouter } from './routes/computerControl.js';
 import { terminalRouter } from './routes/terminal.js';
+import { settingsRouter } from './routes/settings.js';
+import { filesRouter } from './routes/files.js';
+import { memoryRouter } from './routes/memory.js';
+import { usageRouter } from './routes/usage.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 export function createExpressApp() {
@@ -32,6 +36,10 @@ export function createExpressApp() {
   app.use('/api', agentRouter);
   app.use('/api', computerControlRouter);
   app.use('/api', terminalRouter);
+  app.use('/api', settingsRouter);
+  app.use('/api', filesRouter);
+  app.use('/api', memoryRouter);
+  app.use('/api', usageRouter);
 
   // Global Error Handler
   app.use(errorHandler);

@@ -12,8 +12,11 @@ import { Settings } from './components/Settings';
 import { WebpageContextModal } from './components/WebpageContextModal';
 import { CodeExplainerModal } from './components/CodeExplainerModal';
 import { AgentPanel } from './components/AgentPanel';
+import { Dashboard } from './components/Dashboard';
 import { TerminalPanel } from './components/TerminalPanel';
 import { agentApiService, AgentEvent } from './services/agentApi';
+import { notificationService } from './services/notifications';
+import { ShieldAlert, Check, Ban } from 'lucide-react';
 
 export default function App() {
   // Persistence state
@@ -35,6 +38,7 @@ export default function App() {
   const [isContextModalOpen, setIsContextModalOpen] = useState(false);
   const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
+  const [isDashboardOpen, setIsDashboardOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [codeModalInitialSnippet, setCodeModalInitialSnippet] = useState('');
   const [codeModalInitialLang, setCodeModalInitialLang] = useState('typescript');
@@ -50,6 +54,7 @@ export default function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const agentAbortControllerRef = useRef<AbortController | null>(null);
   const agentSessionIdRef = useRef<string | null>(null);
+  const [pendingAgentConfirm, setPendingAgentConfirm] = useState<{ name: string; args: any; step: number } | null>(null);
   const agentWarmedRef = useRef(false);
 
   // Initialize or recover active conversation
@@ -75,6 +80,27 @@ export default function App() {
     checkGateway();
     const timer = setInterval(checkGateway, 30000);
     return () => clearInterval(timer);
+  }, []);
+
+  // Apply theme to the document root so CSS variables/overrides switch globally
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', settings.theme);
+  }, [settings.theme]);
+
+  // Ask for browser notification permission once (no-op in Electron, which
+  // already has native notifications wired in electron/lib/notifications.cjs)
+  useEffect(() => {
+    if (settings.notificationsEnabled && !notificationService.hasAskedBefore()) {
+      notificationService.requestPermission();
+    }
+  }, [settings.notificationsEnabled]);
+
+  const toggleTheme = useCallback(() => {
+    setSettings((prev) => {
+      const next = { ...prev, theme: (prev.theme === 'dark' ? 'light' : 'dark') as 'dark' | 'light' };
+      storageService.saveSettings(next);
+      return next;
+    });
   }, []);
 
   // Update conversation helper
@@ -167,8 +193,29 @@ ${focusInstruction}`;
   const MAX_ATTACHED_FILES = 5;
   const MAX_FILE_READ_BYTES = 300 * 1024; // 300KB of text content per file
 
+  // Formats the backend can extract real text from via /api/files/extract
+  // (mammoth for docx, pdf-parse for pdf, SheetJS for spreadsheets, and
+  // adm-zip for zip archives -- unpacked and each entry run back through
+  // the matching extractor). CSV is routed here too even though it's
+  // technically text, so multi-sheet-style quoting/commas are parsed
+  // correctly instead of dumped raw.
+  const EXTRACTABLE_DOC_EXT = /\.(docx|pdf|xlsx|xls|zip)$/i;
+
   const readFileContent = (file: File): Promise<string> => {
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
+      if (EXTRACTABLE_DOC_EXT.test(file.name)) {
+        try {
+          const { text } = await apiService.extractFileText(file);
+          resolve(text); // server already appends "...[truncated]" when it trims long documents
+          return;
+        } catch (err: any) {
+          resolve(
+            `[Could not extract text from this file: ${err?.message || 'unknown error'}. File name and type were shared with JARVIS.]`
+          );
+          return;
+        }
+      }
+
       const looksTextual =
         file.type.startsWith('text/') ||
         /\.(txt|md|csv|json|js|jsx|ts|tsx|py|java|c|cpp|h|css|html|xml|yml|yaml|sh|log)$/i.test(file.name);
@@ -250,6 +297,7 @@ ${focusInstruction}`;
     agentSessionIdRef.current = sessionId;
     const controller = new AbortController();
     agentAbortControllerRef.current = controller;
+    setPendingAgentConfirm(null);
 
     let log = '';
     const appendLine = (line: string) => {
@@ -294,10 +342,16 @@ ${focusInstruction}`;
         case 'tool_result':
           appendLine(`\`✓ ${event.name}\`: ${event.text.slice(0, 300)}`);
           break;
+        case 'confirm_required':
+          setPendingAgentConfirm({ name: event.name, args: event.args, step: event.step });
+          appendLine(`_Waiting for approval: **${event.name}**_`);
+          break;
         case 'done':
+          setPendingAgentConfirm(null);
           finalizeAgent(log + `\n\n**Done:** ${event.summary}`);
           break;
         case 'error':
+          setPendingAgentConfirm(null);
           finalizeAgent(log + `\n\n**Error:** ${event.message}`, true);
           break;
       }
@@ -551,6 +605,11 @@ ${focusInstruction}`;
       setJarvisState('idle');
       voiceService.playBeep('success');
     }
+
+    if (settings.notificationsEnabled) {
+      const preview = (finalText || 'Response ready.').replace(/\s+/g, ' ').slice(0, 140);
+      notificationService.notify('JARVIS — response ready', preview, { tag: 'jarvis-response' });
+    }
   };
 
   // Handle generation error
@@ -575,6 +634,10 @@ ${focusInstruction}`;
       return { ...conv, messages: msgs, updatedAt: Date.now() };
     });
 
+    if (settings.notificationsEnabled) {
+      notificationService.notify('JARVIS — error', errorMessage.slice(0, 140), { tag: 'jarvis-error' });
+    }
+
     setTimeout(() => {
       setJarvisState((cur) => (cur === 'error' ? 'idle' : cur));
     }, 4000);
@@ -594,6 +657,7 @@ ${focusInstruction}`;
         agentSessionIdRef.current = null;
       }
     }
+    setPendingAgentConfirm(null);
     setIsStreaming(false);
     setJarvisState('idle');
 
@@ -609,6 +673,15 @@ ${focusInstruction}`;
       }
       return { ...conv, messages: msgs, updatedAt: Date.now() };
     });
+  };
+
+  // Approve/deny a destructive action the inline agent is paused on
+  // (mirrors the confirmation flow in AgentPanel.tsx, for tasks run
+  // directly in chat via "/agent <task>" instead of the modal).
+  const handleAgentConfirm = async (approved: boolean) => {
+    if (!agentSessionIdRef.current || !pendingAgentConfirm) return;
+    setPendingAgentConfirm(null);
+    await agentApiService.confirmAction(agentSessionIdRef.current, approved);
   };
 
   // Regenerate last response
@@ -709,7 +782,7 @@ ${focusInstruction}`;
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#040711] text-slate-100 cyber-grid select-text">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#040711] text-slate-100 cyber-grid select-text transition-colors duration-200">
       {/* Sidebar with Conversation Management */}
       <Sidebar
         conversations={conversations}
@@ -732,6 +805,8 @@ ${focusInstruction}`;
         {/* Top Status HUD Indicator */}
         <StatusIndicator
           health={health}
+          theme={settings.theme}
+          onToggleTheme={toggleTheme}
           voiceEnabled={settings.voiceEnabled}
           onToggleVoice={() => {
             const next = { ...settings, voiceEnabled: !settings.voiceEnabled };
@@ -749,6 +824,7 @@ ${focusInstruction}`;
             setIsAgentPanelOpen(true);
           }}
           onOpenTerminal={() => setIsTerminalOpen(true)}
+          onOpenDashboard={() => setIsDashboardOpen(true)}
         />
 
         {/* Conversation Message Stage & Central JARVIS Core */}
@@ -766,6 +842,36 @@ ${focusInstruction}`;
           onExplainCode={(code, lang) => handleOpenCodeExplainer(code, lang)}
           onOpenCodeExplainer={() => handleOpenCodeExplainer()}
         />
+
+        {/* Inline agent destructive-action confirmation (mirrors AgentPanel's) */}
+        {pendingAgentConfirm && (
+          <div className="mx-4 mb-2 p-3 rounded-lg border border-amber-500/40 bg-amber-950/30">
+            <div className="flex items-center gap-2 mb-1.5">
+              <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="text-amber-300 font-semibold text-sm font-hud tracking-wide">APPROVAL REQUIRED</span>
+            </div>
+            <p className="text-xs text-slate-300 font-mono mb-1">
+              JARVIS wants to run: <span className="text-amber-300 font-semibold">{pendingAgentConfirm.name}</span>
+            </p>
+            <pre className="text-[11px] text-slate-400 bg-slate-950/60 rounded p-2 mb-2 overflow-x-auto whitespace-pre-wrap break-words">
+              {JSON.stringify(pendingAgentConfirm.args, null, 2)}
+            </pre>
+            <div className="flex gap-2">
+              <button
+                onClick={() => handleAgentConfirm(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-semibold"
+              >
+                <Check className="w-3.5 h-3.5" /> Approve
+              </button>
+              <button
+                onClick={() => handleAgentConfirm(false)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600/80 hover:bg-red-600 text-white text-xs font-semibold"
+              >
+                <Ban className="w-3.5 h-3.5" /> Deny
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Bottom Command Bar */}
         <InputBar
@@ -835,6 +941,7 @@ ${focusInstruction}`;
       {/* Agent Mode: autonomous desktop & browser control */}
       <AgentPanel isOpen={isAgentPanelOpen} onClose={() => setIsAgentPanelOpen(false)} />
       <TerminalPanel isOpen={isTerminalOpen} onClose={() => setIsTerminalOpen(false)} />
+      <Dashboard isOpen={isDashboardOpen} onClose={() => setIsDashboardOpen(false)} />
     </div>
   );
 }
