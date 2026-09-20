@@ -3,7 +3,7 @@
 
 import { registerTools } from './registry.js';
 import * as terminal from './terminalControl.js';
-import { DESTRUCTIVE_PATTERNS } from './desktopControl.js';
+import { BLOCKED_PATTERNS, ASK_PATTERNS } from './desktopControl.js';
 
 // The agent gets its own persistent terminal session (separate from
 // whatever the user has open in the UI), created lazily on first use so a
@@ -16,8 +16,11 @@ function getAgentTerminalSession(): string {
   return agentTerminalSessionId;
 }
 
-function commandIsDestructive(args: any): boolean {
-  return DESTRUCTIVE_PATTERNS.some((p) => p.test(args?.command || ''));
+function commandTier(args: any): 'safe' | 'ask' | 'block' {
+  const command = args?.command || '';
+  if (BLOCKED_PATTERNS.some((p) => p.test(command))) return 'block';
+  if (ASK_PATTERNS.some((p) => p.test(command))) return 'ask';
+  return 'safe';
 }
 
 registerTools([
@@ -26,17 +29,13 @@ registerTools([
     description:
       "Run a command in a persistent PowerShell terminal (like a real terminal session -- working directory and environment variables carry over between calls, unlike desktop_run_command which starts fresh each time). Use this for anything multi-step: cd into a folder then run something in it, activate an environment then use it, start and later check on a long process, etc.",
     parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
-    // Only destructive if the command actually matches one of the known
-    // catastrophic patterns -- most terminal_run calls are harmless (ls,
-    // git status, npm run dev), so gating on the predicate rather than
-    // `destructive: true` avoids the confirmation UI firing on everything.
-    destructive: commandIsDestructive,
+    // BLOCK-tier commands never reach this handler at all (registry.ts's
+    // dispatch() refuses them). ASK-tier commands only reach here after
+    // the user approves via the confirmation UI -- so unlike the previous
+    // version, an approved command actually runs instead of being refused
+    // a second time.
+    tier: commandTier,
     handler: async (args) => {
-      if (commandIsDestructive(args)) {
-        return {
-          text: 'Refused to run this command -- it matches a pattern for destructive/irreversible operations (disk format, mass delete, shutdown, or registry deletion). If this was genuinely intended, run it manually instead.'
-        };
-      }
       const sessionId = getAgentTerminalSession();
       try {
         const result = await terminal.runCommand(sessionId, args.command);

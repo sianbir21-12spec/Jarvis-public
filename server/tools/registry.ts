@@ -34,16 +34,28 @@ export interface ToolCallResult {
   isTaskComplete?: boolean;
 }
 
+export type ToolTier = 'safe' | 'ask' | 'block';
+
 export interface ToolDefinition {
   name: string;
   description: string;
   // JSON-schema "parameters" object, OpenAI function-calling style.
   parameters: Record<string, unknown>;
   handler: (args: any) => Promise<ToolCallResult>;
-  // Marks this tool as needing user approval before it runs. Either a flat
-  // boolean, or a predicate over the call's args for tools that are only
-  // sometimes destructive (e.g. a shell command matched against a pattern
-  // list) -- used by the agent confirmation UI to decide what to pause on.
+  // Permission tier (SAFE / ASK / BLOCK). Omitted = 'safe' (runs freely --
+  // reads, calculations, navigation). 'ask' pauses for user approval via
+  // the confirmation UI before the handler ever runs. 'block' refuses
+  // outright and never calls the handler at all -- for credential
+  // extraction, persistence primitives (scheduled tasks, registry Run
+  // keys, new admin accounts), and catastrophic/irreversible commands
+  // (disk format, mass delete of system paths). Can be a function of args
+  // for tools that are only sometimes risky, e.g. a shell command matched
+  // against pattern lists.
+  //
+  // `destructive` is kept as a deprecated alias for tier: true === 'ask'.
+  // New tools should use `tier`; this stays so nothing written against the
+  // old field breaks.
+  tier?: ToolTier | ((args: any) => ToolTier);
   destructive?: boolean | ((args: any) => boolean);
 }
 
@@ -68,16 +80,34 @@ export function getToolSchemas(): any[] {
   }));
 }
 
-export function isDestructive(name: string, args: any): boolean {
+export function getTier(name: string, args: any): ToolTier {
   const tool = registry.get(name);
-  if (!tool || !tool.destructive) return false;
-  return typeof tool.destructive === 'function' ? tool.destructive(args) : true;
+  if (!tool) return 'safe';
+  if (tool.tier) return typeof tool.tier === 'function' ? tool.tier(args) : tool.tier;
+  // Fall back to the deprecated `destructive` field.
+  if (tool.destructive) {
+    return (typeof tool.destructive === 'function' ? tool.destructive(args) : tool.destructive) ? 'ask' : 'safe';
+  }
+  return 'safe';
+}
+
+export function isDestructive(name: string, args: any): boolean {
+  return getTier(name, args) === 'ask';
+}
+
+export function isBlocked(name: string, args: any): boolean {
+  return getTier(name, args) === 'block';
 }
 
 export async function dispatch(name: string, args: any): Promise<ToolCallResult> {
   const tool = registry.get(name);
   if (!tool) {
     return { text: `Unknown tool: ${name}` };
+  }
+  // Defense in depth: even if a caller forgets to check the tier before
+  // dispatching (agentLoop.ts does), a blocked call never actually runs.
+  if (getTier(name, args) === 'block') {
+    return { text: `Blocked: "${name}" is not permitted with these arguments (tier: BLOCK). This is not something the user can approve past -- pick a different approach.` };
   }
   try {
     return await tool.handler(args);

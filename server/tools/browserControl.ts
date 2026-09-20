@@ -29,13 +29,19 @@ async function ensureContext(): Promise<BrowserContext> {
     args: ['--start-maximized']
   });
 
+  // Playwright fires 'page' for EVERY new page, including ones we open
+  // ourselves via ctx.newPage(). Pushing unconditionally meant a tab opened
+  // by newTab()/activePage() was recorded twice, so browser_list_tabs showed
+  // phantom duplicates and every index-based tool (switch/close) addressed
+  // the wrong tab. Guard on identity instead.
   context.on('page', (page) => {
-    pages.push(page);
+    if (!pages.includes(page)) pages.push(page);
   });
 
   pages = context.pages();
   if (pages.length === 0) {
-    pages.push(await context.newPage());
+    const first = await context.newPage();
+    if (!pages.includes(first)) pages.push(first);
   }
   activePageIndex = 0;
 
@@ -52,7 +58,8 @@ async function activePage(): Promise<Page> {
   pages = pages.filter((p) => !p.isClosed());
   if (pages.length === 0) {
     const ctx = await ensureContext();
-    pages.push(await ctx.newPage());
+    const page = await ctx.newPage();
+    if (!pages.includes(page)) pages.push(page);
   }
   if (activePageIndex >= pages.length) activePageIndex = 0;
   return pages[activePageIndex];
@@ -187,8 +194,8 @@ export async function listTabs(): Promise<Array<{ index: number; title: string; 
 export async function newTab(url?: string): Promise<{ index: number }> {
   const ctx = await ensureContext();
   const page = await ctx.newPage();
-  pages.push(page);
-  activePageIndex = pages.length - 1;
+  if (!pages.includes(page)) pages.push(page);
+  activePageIndex = pages.indexOf(page);
   if (url) await navigate(url);
   return { index: activePageIndex };
 }

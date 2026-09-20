@@ -6,8 +6,10 @@
 // and repeats until the model calls task_complete, stops requesting tools,
 // hits the step limit, or is aborted.
 //
-// Runs fully autonomously (no per-action confirmation) -- the only manual
-// control is the abort signal wired to the Stop button in the UI.
+// Runs mostly autonomously -- the only pause points are Stop (abort signal
+// wired to the UI) and destructive-tier tool calls, which pause for
+// explicit approval via onConfirmRequired. Blocked-tier calls never pause
+// at all; they're refused outright before ever reaching a handler.
 //
 // Speed notes:
 // - Only the MOST RECENT screenshot is ever sent to the gateway. Earlier
@@ -22,7 +24,7 @@
 
 import { getConfig } from '../runtimeConfig.js';
 import { OMNIROUTE_CONFIG } from '../omniroute.js';
-import { TOOLS, dispatchTool, isDestructive } from '../tools/toolDefinitions.js';
+import { TOOLS, dispatchTool, isDestructive, isBlocked } from '../tools/toolDefinitions.js';
 import type { ScreenshotAnnotation } from '../tools/registry.js';
 import { isComputerControlEnabled } from '../state/computerControlState.js';
 import { renderMemoryForPrompt } from '../memory/memoryStore.js';
@@ -60,6 +62,7 @@ const SYSTEM_PROMPT = `You are JARVIS, an autonomous computer-use agent running 
 Operating rules:
 - For anything shell/CLI related, prefer terminal_run over desktop_run_command -- it's a real persistent PowerShell session (cwd, env vars, activated environments all carry over between calls), the same as a human's terminal, not a fresh throwaway process each time.
 - Take a screenshot (desktop_screenshot or browser_screenshot) before your first action, and again whenever you need to see the current state -- most action tools no longer return one automatically, so request one explicitly if you're not confident what the screen looks like now.
+- On desktop apps (no DOM available), prefer desktop_find_elements over guessing coordinates from a raw screenshot -- it returns labeled elements with pixel bounding boxes; click/type at the center of the box (x + w/2, y + h/2) rather than estimating by eye. Reserve raw desktop_screenshot + eyeballed coordinates for cases where an element wasn't detected.
 - Only your most recent screenshot is kept in context -- earlier ones are replaced with a placeholder to keep things fast. If you need to compare against an earlier screen state, take a fresh screenshot rather than assuming you can still see an old one.
 - In the browser, ALWAYS try browser_get_interactive_elements + browser_click_selector/browser_type_selector FIRST -- it needs no screenshot and no vision call, so it's much faster than the screenshot+coordinates path. Only fall back to browser_screenshot + coordinates if there's genuinely no usable selector.
 - Batch independent actions into a single turn when you can (e.g. click a field AND type into it, or several keypresses in a row) -- each turn is a full round-trip to the model, so fewer, bigger turns finish the task faster than many small ones.
@@ -272,7 +275,14 @@ export async function runAgent({ task, signal, onEvent, onConfirmRequired }: Run
 
       let result;
       try {
-        if (isDestructive(name, args)) {
+        if (isBlocked(name, args)) {
+          // Never even offers a confirmation -- this tier means the action
+          // isn't something the user should be able to approve past (e.g.
+          // credential extraction, persistence). Straight refusal.
+          result = {
+            text: `Blocked: "${name}" is not permitted with these arguments (tier: BLOCK). Do not retry it -- pick a different approach or ask the user what they actually need.`
+          };
+        } else if (isDestructive(name, args)) {
           onEvent({ type: 'confirm_required', name, args, step });
           const approved = await onConfirmRequired(name, args, step);
 
@@ -319,7 +329,7 @@ export async function runAgent({ task, signal, onEvent, onConfirmRequired }: Run
           role: 'user',
           content: [
             { type: 'text', text: `Screenshot after "${name}":` },
-            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${result.screenshot}` } }
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${result.screenshot.base64}` } }
           ]
         });
         pruneOldScreenshots(messages, KEEP_LAST_N_SCREENSHOTS);

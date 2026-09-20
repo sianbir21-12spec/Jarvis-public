@@ -135,14 +135,5 @@
     "portable": {
       "artifactName": "JARVIS-${version}-portable.exe"
     }
-  },
-  "allowScripts": {
-    "esbuild@0.25.12": true,
-    "esbuild@0.28.2": true,
-    "electron-winstaller@5.4.0": true,
-    "@google/genai@2.22.0": true,
-    "node-window-manager@2.2.4": true,
-    "protobufjs@7.6.6": true,
-    "extract-file-icon@0.3.2": true
   }
 }

@@ -4,6 +4,14 @@
 
 import { registerTools } from './registry.js';
 import * as desktop from './desktopControl.js';
+import { BLOCKED_PATTERNS, ASK_PATTERNS } from './desktopControl.js';
+
+function shellCommandTier(args: any): 'safe' | 'ask' | 'block' {
+  const command = args?.command || '';
+  if (BLOCKED_PATTERNS.some((p) => p.test(command))) return 'block';
+  if (ASK_PATTERNS.some((p) => p.test(command))) return 'ask';
+  return 'safe';
+}
 
 registerTools([
   {
@@ -141,13 +149,11 @@ registerTools([
     name: 'desktop_run_command',
     description: 'Run a PowerShell command and return its output. Use for things easier done via shell than UI (file operations, system info, etc).',
     parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
-    // desktopControl.runShellCommand already refuses DESTRUCTIVE_PATTERNS
-    // internally (disk format, mass delete, shutdown, registry deletion);
-    // this flag is what tells the *confirmation UI* to pause on the rest --
-    // any shell command, not just the hard-blocked ones -- since arbitrary
-    // PowerShell can still delete/overwrite files even without matching
-    // one of those specific catastrophic patterns.
-    destructive: true,
+    // Tiered like terminal_run: BLOCK-tier commands never reach the
+    // handler (registry.ts refuses them before dispatch); ASK-tier pauses
+    // for approval; everything else (dir, Get-Process, echo, etc.) runs
+    // freely rather than pausing on every single command.
+    tier: shellCommandTier,
     handler: async (args) => {
       const result = await desktop.runShellCommand(args.command);
       return { text: `stdout: ${result.stdout}\nstderr: ${result.stderr}` };

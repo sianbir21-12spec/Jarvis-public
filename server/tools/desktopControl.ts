@@ -13,7 +13,7 @@
 // SmartScreen/Defender may prompt once for the native nut-js binary --
 // that's expected for any input-simulation tool.
 
-import { spawn, exec } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
@@ -55,6 +55,28 @@ export interface ScreenshotResult {
   height: number;
 }
 
+// Screenshots handed to the model are downscaled (see captureScreen), so the
+// coordinates it reads off them are in the *screenshot's* pixel space, not
+// the screen's. nut-js expects real screen pixels. Without converting, every
+// click on a display wider than AGENT_SCREENSHOT_WIDTH lands at the wrong
+// place -- e.g. on a 1920px-wide screen with a 1024px screenshot, at ~53% of
+// the intended position, which silently breaks essentially every task.
+//
+// captureScreen records the factor it used; toScreenCoords applies it.
+// Defaults to 1 so a click issued before any screenshot (or when no
+// downscaling happened) is passed through untouched.
+let lastCaptureScale = 1;
+
+export function getLastCaptureScale(): number {
+  return lastCaptureScale;
+}
+
+/** Maps a point from the most recent screenshot's pixel space to screen pixels. */
+export function toScreenCoords(x: number, y: number): { x: number; y: number } {
+  if (!lastCaptureScale || lastCaptureScale === 1) return { x: Math.round(x), y: Math.round(y) };
+  return { x: Math.round(x / lastCaptureScale), y: Math.round(y / lastCaptureScale) };
+}
+
 /** Captures the primary screen as a PNG, downscaled so it's cheap to send to a model. */
 export async function captureScreen(maxWidth = Number(process.env.AGENT_SCREENSHOT_WIDTH) || 1024): Promise<ScreenshotResult> {
   const { screen } = await getNut();
@@ -77,10 +99,13 @@ export async function captureScreen(maxWidth = Number(process.env.AGENT_SCREENSH
   }
 
   const quality = Number(process.env.AGENT_SCREENSHOT_QUALITY) || 60;
-  const pngBuffer = await pipeline.jpeg({ quality }).toBuffer();
+  const jpegBuffer = await pipeline.jpeg({ quality }).toBuffer();
+
+  // Remember how much this frame was shrunk so click/move/drag can undo it.
+  lastCaptureScale = scale;
 
   return {
-    base64: pngBuffer.toString('base64'),
+    base64: jpegBuffer.toString('base64'),
     width: outWidth,
     height: outHeight
   };
@@ -95,14 +120,16 @@ export async function getScreenSize(): Promise<{ width: number; height: number }
 
 export async function moveMouse(x: number, y: number) {
   const { mouse, straightTo, Point } = await getNut();
-  await mouse.move(straightTo(new Point(x, y)));
+  const p = toScreenCoords(x, y);
+  await mouse.move(straightTo(new Point(p.x, p.y)));
 }
 
 type MouseButton = 'left' | 'right' | 'middle';
 
 export async function click(x: number, y: number, button: MouseButton = 'left', double = false) {
   const { mouse, straightTo, Point, Button } = await getNut();
-  await mouse.move(straightTo(new Point(x, y)));
+  const p = toScreenCoords(x, y);
+  await mouse.move(straightTo(new Point(p.x, p.y)));
   const btn = button === 'right' ? Button.RIGHT : button === 'middle' ? Button.MIDDLE : Button.LEFT;
   if (double) {
     await mouse.doubleClick(btn);
@@ -112,16 +139,20 @@ export async function click(x: number, y: number, button: MouseButton = 'left', 
 }
 
 export async function drag(fromX: number, fromY: number, toX: number, toY: number) {
-  const { mouse, straightTo, Point } = await getNut();
-  await mouse.move(straightTo(new Point(fromX, fromY)));
-  await mouse.pressButton((await getNut()).Button.LEFT);
-  await mouse.move(straightTo(new Point(toX, toY)));
-  await mouse.releaseButton((await getNut()).Button.LEFT);
+  const { mouse, straightTo, Point, Button } = await getNut();
+  const from = toScreenCoords(fromX, fromY);
+  const to = toScreenCoords(toX, toY);
+  await mouse.move(straightTo(new Point(from.x, from.y)));
+  await mouse.pressButton(Button.LEFT);
+  await mouse.move(straightTo(new Point(to.x, to.y)));
+  await mouse.releaseButton(Button.LEFT);
 }
 
 export async function scroll(deltaX: number, deltaY: number) {
   const { mouse } = await getNut();
-  if (deltaY !== 0) await mouse.scrollDown(deltaY > 0 ? deltaY : 0);
+  // Previously a negative deltaY issued a pointless scrollDown(0) before
+  // scrolling up; only one direction should ever fire per axis.
+  if (deltaY > 0) await mouse.scrollDown(deltaY);
   if (deltaY < 0) await mouse.scrollUp(Math.abs(deltaY));
   if (deltaX > 0) await mouse.scrollRight(deltaX);
   if (deltaX < 0) await mouse.scrollLeft(Math.abs(deltaX));
@@ -327,12 +358,15 @@ export async function launchApp(target: string): Promise<void> {
   );
 }
 
-// Blocks the handful of commands that are almost never intended and are
-// catastrophic if a model hallucinates or misreads a task ("clean up my
-// disk" -> format). This is NOT a sandbox -- desktop_run_command still runs
-// arbitrary PowerShell with your full user permissions. It only stops the
-// small set of single-command catastrophes that are cheap to detect.
-export const DESTRUCTIVE_PATTERNS = [
+// BLOCK tier: catastrophic/irreversible commands, plus credential
+// extraction and persistence primitives (per the permission-engine spec --
+// these are not something a user should be able to approve past through
+// the agent, since an LLM agent approving its own persistence mechanism
+// defeats the point of asking). This is NOT a sandbox -- desktop_run_command
+// still runs arbitrary PowerShell with your full user permissions. It only
+// stops the specific, cheap-to-detect patterns below.
+export const BLOCKED_PATTERNS = [
+  // Catastrophic / irreversible
   /\bformat\s+[a-z]:/i,
   /remove-item\s+.*-recurse.*[\\/](windows|users|program files)\b/i,
   /remove-item\s+.*-recurse.*\s+[a-z]:\\?\s*$/i, // "-Recurse C:\" or "-Recurse C:"
@@ -340,13 +374,39 @@ export const DESTRUCTIVE_PATTERNS = [
   /\bdel\s+\/[sf]\s+\/[sf]\s+[a-z]:\\?\s*$/i,
   /shutdown\s+\/s|shutdown\s+\/r/i,
   /diskpart/i,
-  /reg\s+delete\s+hklm/i
+  /reg\s+delete\s+hklm/i,
+  // Credential extraction
+  /mimikatz|sekurlsa|lsass\.exe|procdump.*lsass/i,
+  /login\s*data['"]?\s*$/i, // Chrome/Edge saved-password DB
+  /\.ssh[\\/]id_rsa|\.aws[\\/]credentials/i,
+  /Get-Content.*(\.ssh|\.aws|credential)/i,
+  // Persistence / privilege escalation
+  /reg\s+add\s+.*\\run\b/i, // HKCU/HKLM ...\Run registry key
+  /schtasks\s+\/create|new-scheduledtask/i,
+  /net\s+user\s+.*\/add|net\s+localgroup\s+administrators\s+.*\/add/i,
+  /Add-MpPreference\s+-ExclusionPath|Set-MpPreference\s+-DisableRealtimeMonitoring/i
+];
+
+/** @deprecated use BLOCKED_PATTERNS -- kept so nothing importing the old name breaks. */
+export const DESTRUCTIVE_PATTERNS = BLOCKED_PATTERNS;
+
+// ASK tier: recoverable but risky enough to want a human in the loop.
+// Previously these ran completely unchecked -- this is new coverage, not a
+// relaxation of anything.
+export const ASK_PATTERNS = [
+  /\bremove-item\b|\bdel\s+|\berase\s+/i,
+  /\btaskkill\b|stop-process/i,
+  /git\s+reset\s+--hard|git\s+clean\s+-f/i,
+  /npm\s+uninstall\s+-g|pip\s+uninstall/i,
+  /docker\s+(rm|rmi|system\s+prune)/i,
+  /set-executionpolicy/i,
+  /stop-service|restart-service/i
 ];
 
 export async function runShellCommand(command: string, timeoutMs = 20000): Promise<{ stdout: string; stderr: string }> {
-  if (DESTRUCTIVE_PATTERNS.some((p) => p.test(command))) {
+  if (BLOCKED_PATTERNS.some((p) => p.test(command))) {
     throw new Error(
-      `Refused to run this command -- it matches a pattern for destructive/irreversible operations (disk format, mass delete, shutdown, or registry deletion). If this was genuinely intended, run [...]`
+      `Refused to run this command -- it matches a pattern for destructive/irreversible operations, credential extraction, or persistence (tier: BLOCK). This cannot be approved past; if genuinely intended, run it manually instead.`
     );
   }
   const { stdout, stderr } = await execAsync(command, {

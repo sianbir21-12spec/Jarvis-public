@@ -41,7 +41,9 @@ chatRouter.get('/health', async (req: Request, res: Response) => {
     const latency = Date.now() - startTime;
 
     res.json({
-      status: pingRes && pingRes.ok ? 'online' : 'online', // gateway responded
+      // The ternary here used to return 'online' on both branches, so the
+      // HUD pill read ONLINE even when the gateway was unreachable.
+      status: pingRes && pingRes.ok ? 'online' : 'offline',
       latency,
       model: OMNIROUTE_CONFIG.defaultModel,
       gateway: OMNIROUTE_CONFIG.baseUrl,
@@ -66,8 +68,13 @@ chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction)
   const abortController = new AbortController();
   const requestStart = Date.now();
 
-  req.on('close', () => {
-    abortController.abort();
+  // Listen on the *response*, not the request: in modern Node, `req`
+  // emits 'close' as soon as the body has been fully read -- which
+  // express.json() already did before this handler ran -- so aborting
+  // there fired instantly on every request. `res` only closes when the
+  // client actually disconnects.
+  res.on('close', () => {
+    if (!res.writableEnded) abortController.abort();
   });
 
   try {
@@ -105,7 +112,8 @@ chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction)
         model,
         temperature,
         max_tokens: maxTokens,
-        stream: false
+        stream: false,
+        signal: abortController.signal
       });
 
       const data: any = await gatewayResponse.json();
@@ -124,7 +132,8 @@ chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction)
       model,
       temperature,
       max_tokens: maxTokens,
-      stream: true
+      stream: true,
+      signal: abortController.signal
     });
 
     const body = gatewayResponse.body;
@@ -144,6 +153,11 @@ chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction)
     let buffer = '';
 
     while (true) {
+      if (abortController.signal.aborted) {
+        await reader.cancel().catch(() => {});
+        break;
+      }
+
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -158,7 +172,9 @@ chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction)
         if (trimmed.startsWith('data:')) {
           const dataStr = trimmed.slice(5).trim();
           if (dataStr === '[DONE]') {
-            res.write('data: [DONE]\n\n');
+            // Swallow it here -- a single [DONE] is written once the loop
+            // finishes. Forwarding it as well sent two, which made the
+            // client finalize the message twice.
             continue;
           }
 
@@ -181,9 +197,7 @@ chatRouter.post('/chat', async (req: Request, res: Response, next: NextFunction)
       const trimmed = buffer.trim();
       if (trimmed.startsWith('data:')) {
         const dataStr = trimmed.slice(5).trim();
-        if (dataStr === '[DONE]') {
-          res.write('data: [DONE]\n\n');
-        } else {
+        if (dataStr !== '[DONE]') {
           try {
             const parsed = JSON.parse(dataStr);
             const delta = parsed.choices?.[0]?.delta?.content;
@@ -243,6 +257,10 @@ chatRouter.post('/webpage-context', async (req: Request, res: Response) => {
       host === 'localhost' ||
       host === '127.0.0.1' ||
       host === '::1' ||
+      host === '0.0.0.0' ||
+      host === '[::1]' ||
+      /^127\./.test(host) ||
+      /^169\.254\./.test(host) || // link-local, incl. cloud metadata endpoints
       host.startsWith('10.') ||
       host.startsWith('192.168.') ||
       /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||

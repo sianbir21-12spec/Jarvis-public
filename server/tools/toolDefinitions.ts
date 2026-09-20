@@ -16,11 +16,12 @@ import './browser.tools.js';
 import './terminal.tools.js';
 import './task.tools.js';
 import './memory.tools.js';
+import './vision.tools.js';
 
-import { getToolSchemas, dispatch, isDestructive, listToolNames } from './registry.js';
+import { getToolSchemas, dispatch, isDestructive, isBlocked, listToolNames } from './registry.js';
 import type { ToolCallResult, ScreenshotAnnotation } from './registry.js';
 
 export const TOOLS: any[] = getToolSchemas();
 export const dispatchTool = dispatch;
-export { isDestructive, listToolNames };
+export { isDestructive, isBlocked, listToolNames };
 export type { ToolCallResult, ScreenshotAnnotation };

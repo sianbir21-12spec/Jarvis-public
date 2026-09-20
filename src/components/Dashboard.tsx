@@ -74,10 +74,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ isOpen, onClose }) => {
     setError('');
     try {
       const res = await fetch(`/api/usage/summary?days=${d}`);
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+
+      // An error response is still valid JSON ({ error: ... }), so without
+      // these checks it got stored as the summary and the render below blew
+      // up on summary.totals.chatMessages -- taking the whole panel down
+      // instead of showing the message.
+      if (!res.ok) {
+        throw new Error(data?.error || `Usage request failed (${res.status}).`);
+      }
+      if (!data || !data.totals || !Array.isArray(data.messagesByDay)) {
+        throw new Error('Usage data came back in an unexpected shape.');
+      }
+
       setSummary(data);
-    } catch {
-      setError('Could not reach the JARVIS backend to load usage data.');
+    } catch (err: any) {
+      setSummary(null);
+      setError(err?.message || 'Could not reach the JARVIS backend to load usage data.');
     } finally {
       setLoading(false);
     }

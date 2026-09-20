@@ -13,6 +13,10 @@ export interface OmniRouteChatOptions {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  // Lets the caller cancel the upstream request when the browser
+  // disconnects, instead of leaving the gateway call running and writing
+  // into a dead socket until it finishes.
+  signal?: AbortSignal;
 }
 
 export const OMNIROUTE_CONFIG = {
@@ -82,7 +86,8 @@ export async function fetchOmniRouteChat(options: OmniRouteChatOptions) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: options.signal
   });
 
   if (!response.ok) {
