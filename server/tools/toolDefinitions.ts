@@ -17,6 +17,7 @@ import './terminal.tools.js';
 import './task.tools.js';
 import './memory.tools.js';
 import './vision.tools.js';
+import './plan.tools.js';
 
 import { getToolSchemas, dispatch, isDestructive, isBlocked, listToolNames } from './registry.js';
 import type { ToolCallResult, ScreenshotAnnotation } from './registry.js';

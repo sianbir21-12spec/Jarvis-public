@@ -346,6 +346,13 @@ ${focusInstruction}`;
           setPendingAgentConfirm({ name: event.name, args: event.args, step: event.step });
           appendLine(`_Waiting for approval: **${event.name}**_`);
           break;
+        case 'plan': {
+          const summary = event.steps
+            .map((s, i) => `${i + 1}. [${s.status === 'done' ? 'x' : ' '}] ${s.description}${s.status === 'failed' ? ' (failed)' : ''}`)
+            .join('\n');
+          appendLine(`**Plan:**\n${summary}`);
+          break;
+        }
         case 'done':
           setPendingAgentConfirm(null);
           finalizeAgent(log + `\n\n**Done:** ${event.summary}`);

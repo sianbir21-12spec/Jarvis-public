@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { X, Play, Square, Loader2, Terminal, CheckCircle2, AlertTriangle, Mic, ShieldAlert, Check, Ban } from 'lucide-react';
-import { agentApiService, AgentEvent, ScreenshotAnnotation } from '../services/agentApi';
+import { X, Play, Square, Loader2, Terminal, CheckCircle2, AlertTriangle, Mic, ShieldAlert, Check, Ban, ListChecks, XCircle, Circle } from 'lucide-react';
+import { agentApiService, AgentEvent, ScreenshotAnnotation, PlanStep } from '../services/agentApi';
 import { voiceService } from '../services/voice';
 
 interface AgentPanelProps {
@@ -32,6 +32,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ isOpen, onClose }) => {
   const [voiceError, setVoiceError] = useState('');
   const [log, setLog] = useState<LogEntry[]>([]);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const [plan, setPlan] = useState<PlanStep[]>([]);
   const sessionIdRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -77,6 +78,9 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ isOpen, onClose }) => {
         setPendingConfirmation({ name: event.name, args: event.args, step: event.step });
         appendLog({ id, kind: 'status', title: `Waiting for approval: ${event.name}` });
         break;
+      case 'plan':
+        setPlan(event.steps);
+        break;
       case 'done':
         appendLog({ id, kind: 'done', title: 'Task complete', detail: event.summary });
         setIsRunning(false);
@@ -109,6 +113,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ isOpen, onClose }) => {
     setLog([]);
     setIsRunning(true);
     setPendingConfirmation(null);
+    setPlan([]);
     const sessionId = 'agent_' + Date.now();
     sessionIdRef.current = sessionId;
     const controller = new AbortController();
@@ -221,6 +226,51 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ isOpen, onClose }) => {
           )}
           {voiceError && <p className="text-[11px] text-red-400 font-mono">{voiceError}</p>}
         </div>
+
+        {/* Live plan / timeline */}
+        {plan.length > 0 && (
+          <div className="mx-4 mt-3 p-3 rounded-lg border border-cyan-500/20 bg-slate-950/60">
+            <div className="flex items-center gap-2 mb-2">
+              <ListChecks className="w-4 h-4 text-cyan-400" />
+              <span className="text-cyan-300 font-semibold text-xs font-hud tracking-wide">
+                PLAN ({plan.filter((s) => s.status === 'done').length}/{plan.length})
+              </span>
+            </div>
+            <ol className="space-y-1">
+              {plan.map((step, i) => {
+                const icon =
+                  step.status === 'done' ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : step.status === 'failed' ? (
+                    <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                  ) : step.status === 'in_progress' ? (
+                    <Loader2 className="w-3.5 h-3.5 text-amber-400 shrink-0 animate-spin" />
+                  ) : (
+                    <Circle className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                  );
+                const textColor =
+                  step.status === 'done'
+                    ? 'text-slate-500 line-through'
+                    : step.status === 'failed'
+                    ? 'text-red-300'
+                    : step.status === 'in_progress'
+                    ? 'text-slate-100'
+                    : 'text-slate-400';
+                return (
+                  <li key={step.id} className="flex items-start gap-2 text-xs font-mono">
+                    {icon}
+                    <span className={textColor}>
+                      {i + 1}. {step.description}
+                      {step.status === 'failed' && step.attempts > 1 && (
+                        <span className="text-red-500/70"> (attempt {step.attempts})</span>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        )}
 
         {/* Destructive-action confirmation */}
         {pendingConfirmation && (

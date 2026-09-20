@@ -6,6 +6,13 @@ export interface ScreenshotAnnotation {
   label: string;
 }
 
+export interface PlanStep {
+  id: string;
+  description: string;
+  status: 'pending' | 'in_progress' | 'done' | 'failed';
+  attempts: number;
+}
+
 export type AgentEvent =
   | { type: 'status'; message: string }
   | { type: 'assistant_text'; text: string }
@@ -21,6 +28,7 @@ export type AgentEvent =
       step: number;
     }
   | { type: 'confirm_required'; name: string; args: any; step: number }
+  | { type: 'plan'; steps: PlanStep[] }
   | { type: 'done'; summary: string }
   | { type: 'error'; message: string };
 

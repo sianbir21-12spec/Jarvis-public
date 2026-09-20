@@ -29,6 +29,7 @@ import type { ScreenshotAnnotation } from '../tools/registry.js';
 import { isComputerControlEnabled } from '../state/computerControlState.js';
 import { renderMemoryForPrompt } from '../memory/memoryStore.js';
 import { logUsageEvent } from '../state/usage.js';
+import { getPlan, clearPlan, type PlanStep } from '../state/planState.js';
 
 // Lower than before, deliberately: combined with the "batch actions per
 // turn" prompt guidance, a tighter budget pushes the model toward fewer,
@@ -54,12 +55,14 @@ export type AgentEvent =
   | { type: 'tool_call'; name: string; args: any; step: number }
   | { type: 'tool_result'; name: string; text: string; screenshot?: string; screenshotWidth?: number; screenshotHeight?: number; annotations?: ScreenshotAnnotation[]; step: number }
   | { type: 'confirm_required'; name: string; args: any; step: number }
+  | { type: 'plan'; steps: PlanStep[] }
   | { type: 'done'; summary: string }
   | { type: 'error'; message: string };
 
 const SYSTEM_PROMPT = `You are JARVIS, an autonomous computer-use agent running on the user's own Windows PC with full permission to act. You can see the screen via screenshots and control the mouse, keyboard, a real persistent terminal, and a real Chrome browser through the provided tools.
 
 Operating rules:
+- Work in an OBSERVE -> PLAN -> ACT -> VERIFY -> RECOVER loop, not a blind sequence of actions. For anything beyond a single trivial action: OBSERVE the current state (screenshot/page text), call plan_set to PLAN 2-8 concrete steps, then for each step: mark it in_progress, ACT, VERIFY the result actually happened (a fresh screenshot or equivalent check -- not just that the action ran without erroring) before marking it done, and if it didn't work, that's RECOVER -- try a genuinely different approach for that same step rather than repeating the failed action or plowing ahead as if it worked. Skip plan_set only for genuinely one-step tasks (e.g. "open the start menu").
 - For anything shell/CLI related, prefer terminal_run over desktop_run_command -- it's a real persistent PowerShell session (cwd, env vars, activated environments all carry over between calls), the same as a human's terminal, not a fresh throwaway process each time.
 - Take a screenshot (desktop_screenshot or browser_screenshot) before your first action, and again whenever you need to see the current state -- most action tools no longer return one automatically, so request one explicitly if you're not confident what the screen looks like now.
 - On desktop apps (no DOM available), prefer desktop_find_elements over guessing coordinates from a raw screenshot -- it returns labeled elements with pixel bounding boxes; click/type at the center of the box (x + w/2, y + h/2) rather than estimating by eye. Reserve raw desktop_screenshot + eyeballed coordinates for cases where an element wasn't detected.
@@ -68,8 +71,8 @@ Operating rules:
 - Batch independent actions into a single turn when you can (e.g. click a field AND type into it, or several keypresses in a row) -- each turn is a full round-trip to the model, so fewer, bigger turns finish the task faster than many small ones.
 - If something on screen doesn't match your expectation, stop and re-assess with a fresh screenshot rather than repeating the same action.
 - You have full autonomy: do not ask the user for confirmation in your own text before acting. Just proceed. (A small set of destructive actions -- deleting/overwriting files, running a destructive terminal command -- pause automatically for the user's approval; that's handled outside your control. If one comes back declined, don't retry it verbatim -- ask what to do instead or pick a different approach.)
-- Call task_complete as soon as the task is verifiably done -- don't take extra confirming screenshots once you're confident. This includes simple tasks (e.g. "open the start menu") -- once the action is done, call task_complete immediately rather than continuing to observe.
-- If a task is genuinely impossible, ambiguous to a blocking degree, or you get stuck after several attempts, call task_complete and explain why.
+- Call task_complete as soon as every plan step is verifiably done (or explicitly failed with an explanation) -- don't take extra confirming screenshots once you're confident. This includes simple tasks (e.g. "open the start menu") -- once the action is done, call task_complete immediately rather than continuing to observe.
+- If a task is genuinely impossible, ambiguous to a blocking degree, or a step keeps failing after a genuinely different approach, call task_complete and explain why -- mark the relevant step(s) failed via plan_update_step first so the user can see what didn't work, rather than silently giving up.
 - Keep any prose you send back short -- most of your turns should just be tool calls.
 - Use memory_remember when you learn a durable fact worth keeping for future sessions (a stated preference, a recurring detail about the user's setup) -- not for one-off details that only matter for this task. Use memory_recall if you need to check what's already known before asking the user something they may have told you before.`;
 
@@ -194,6 +197,7 @@ export async function warmGatewayConnection(): Promise<void> {
 
 export async function runAgent({ task, signal, onEvent, onConfirmRequired }: RunAgentOptions): Promise<void> {
   const runStart = Date.now();
+  clearPlan(); // fresh plan for this run -- see module docblock on the singleton assumption
   // Wraps onEvent for the loop's terminal events ('done'/'error') so every
   // exit path logs exactly one agent_run usage event, regardless of which
   // of the several return points below it took.
@@ -313,6 +317,10 @@ export async function runAgent({ task, signal, onEvent, onConfirmRequired }: Run
         annotations: result.annotations,
         step
       });
+
+      if (name === 'plan_set' || name === 'plan_update_step') {
+        onEvent({ type: 'plan', steps: getPlan() });
+      }
 
       // Tool result goes back as a 'tool' message (text only -- broad gateway compatibility).
       messages.push({
