@@ -74,6 +74,7 @@ Operating rules:
 - Call task_complete as soon as every plan step is verifiably done (or explicitly failed with an explanation) -- don't take extra confirming screenshots once you're confident. This includes simple tasks (e.g. "open the start menu") -- once the action is done, call task_complete immediately rather than continuing to observe.
 - If a task is genuinely impossible, ambiguous to a blocking degree, or a step keeps failing after a genuinely different approach, call task_complete and explain why -- mark the relevant step(s) failed via plan_update_step first so the user can see what didn't work, rather than silently giving up.
 - Keep any prose you send back short -- most of your turns should just be tool calls.
+- For saving/reading/moving/deleting files or listing/searching directories, use the file_* and directory_create tools directly instead of shelling out through terminal_run/desktop_run_command -- they're structured, show up clearly in the timeline, and file_write/file_copy/file_move already re-verify the result on disk for you. After any file_write intended as a final deliverable, call file_exists (or re-read it) to confirm it actually landed before calling task_complete -- never claim a file was saved without checking.
 - Use memory_remember when you learn a durable fact worth keeping for future sessions (a stated preference, a recurring detail about the user's setup) -- not for one-off details that only matter for this task. Use memory_recall if you need to check what's already known before asking the user something they may have told you before.`;
 
 // Rebuilt per run (not cached) so a memory saved moments ago -- including
@@ -120,7 +121,7 @@ function pruneOldScreenshots(messages: any[], keepLastN: number) {
   }
 }
 
-async function callGateway(messages: any[], outerSignal: AbortSignal): Promise<any> {
+async function callGateway(messages: any[], outerSignal: AbortSignal, model = agentModel()): Promise<any> {
   const endpoint = `${OMNIROUTE_CONFIG.baseUrl}/v1/chat/completions`;
   const linkedController = new AbortController();
   const onOuterAbort = () => linkedController.abort();
@@ -136,7 +137,7 @@ async function callGateway(messages: any[], outerSignal: AbortSignal): Promise<a
         Authorization: `Bearer ${OMNIROUTE_CONFIG.apiKey}`
       },
       body: JSON.stringify({
-        model: agentModel(),
+        model,
         messages,
         tools: TOOLS,
         tool_choice: 'auto',
@@ -148,7 +149,9 @@ async function callGateway(messages: any[], outerSignal: AbortSignal): Promise<a
 
     if (!response.ok) {
       const errText = await response.text().catch(() => response.statusText);
-      throw new Error(`Gateway error ${response.status}: ${errText}`);
+      const err: any = new Error(`Gateway error ${response.status}: ${errText}`);
+      err.gatewayStatus = response.status;
+      throw err;
     }
     return await response.json();
   } catch (err: any) {
@@ -156,12 +159,36 @@ async function callGateway(messages: any[], outerSignal: AbortSignal): Promise<a
       throw err; // real user-initiated stop -- let the caller's own abort handling take over
     }
     if (linkedController.signal.aborted) {
-      throw new Error(`Gateway did not respond within ${STEP_TIMEOUT_MS / 1000}s -- step timed out.`);
+      const timeoutErr: any = new Error(`Gateway did not respond within ${STEP_TIMEOUT_MS / 1000}s -- step timed out.`);
+      timeoutErr.gatewayStatus = 'timeout';
+      throw timeoutErr;
     }
     throw err;
   } finally {
     clearTimeout(timeoutHandle);
     outerSignal.removeEventListener('abort', onOuterAbort);
+  }
+}
+
+// Wraps callGateway with a single fallback attempt: if the primary model
+// call fails for a reason that looks like the MODEL/gateway being down
+// (5xx, timeout, network error -- not a 4xx like bad request, which a
+// different model won't fix either) and AGENT_FALLBACK_MODEL is
+// configured, retry once against the fallback before giving up. This is
+// what makes "model outages use the fallback" (error-handling spec) an
+// actual behavior instead of just a config field nobody reads.
+async function callGatewayWithFallback(messages: any[], signal: AbortSignal, onEvent: (e: AgentEvent) => void): Promise<any> {
+  const primary = agentModel();
+  try {
+    return await callGateway(messages, signal, primary);
+  } catch (err: any) {
+    if (signal.aborted) throw err;
+    const status = err?.gatewayStatus;
+    const looksLikeOutage = status === 'timeout' || (typeof status === 'number' && status >= 500);
+    const fallback = OMNIROUTE_CONFIG.fallbackModel;
+    if (!looksLikeOutage || !fallback || fallback === primary) throw err;
+    onEvent({ type: 'status', message: `"${primary}" appears to be down (${err.message}) -- retrying with fallback model "${fallback}".` });
+    return await callGateway(messages, signal, fallback);
   }
 }
 
@@ -213,6 +240,15 @@ export async function runAgent({ task, signal, onEvent, onConfirmRequired }: Run
 
   onEvent({ type: 'status', message: 'Starting agent…' });
 
+  // RECOVER enforcement: the system prompt asks the model to try a
+  // genuinely different approach after a failed step, but nothing
+  // previously stopped it from just repeating the identical call (same
+  // name + args) turn after turn if it got confused. Track the last call
+  // and nudge explicitly once a repeat is detected, rather than silently
+  // burning the step budget on a loop that will never succeed.
+  let lastCallSignature: string | null = null;
+  let repeatCount = 0;
+
   for (let step = 0; step < MAX_STEPS; step++) {
     if (signal.aborted) {
       onEvent({ type: 'status', message: 'Stopped by user.' });
@@ -226,7 +262,7 @@ export async function runAgent({ task, signal, onEvent, onConfirmRequired }: Run
 
     let data: any;
     try {
-      data = await callGateway(messages, signal);
+      data = await callGatewayWithFallback(messages, signal, onEvent);
     } catch (err: any) {
       if (signal.aborted) {
         onEvent({ type: 'status', message: 'Stopped by user.' });
@@ -274,12 +310,25 @@ export async function runAgent({ task, signal, onEvent, onConfirmRequired }: Run
       }
       const name = call.function?.name || 'unknown';
 
+      const signature = `${name}:${JSON.stringify(args)}`;
+      repeatCount = signature === lastCallSignature ? repeatCount + 1 : 0;
+      lastCallSignature = signature;
+
       onEvent({ type: 'tool_call', name, args, step });
       logUsageEvent({ type: 'tool_call', tool: name });
 
       let result;
       try {
-        if (isBlocked(name, args)) {
+        if (repeatCount >= 2) {
+          // Same exact call three times in a row -- not RECOVER, just a
+          // stuck loop. Refuse to run it a third time and force a
+          // different approach instead of burning the rest of the step
+          // budget on a call that has already failed identically twice.
+          result = {
+            text: `Stopped: "${name}" was called with identical arguments 3 times in a row with no progress in between. This is a stuck loop, not recovery. Do not repeat this exact call again -- take a fresh screenshot, re-read the actual error/result text from the previous attempts, and try a genuinely different tool, selector, or coordinates. If there's truly no other option, call task_complete and explain what's blocking progress.`
+          };
+          repeatCount = 0;
+        } else if (isBlocked(name, args)) {
           // Never even offers a confirmation -- this tier means the action
           // isn't something the user should be able to approve past (e.g.
           // credential extraction, persistence). Straight refusal.

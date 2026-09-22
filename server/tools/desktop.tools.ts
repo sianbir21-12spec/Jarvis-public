@@ -158,5 +158,68 @@ registerTools([
       const result = await desktop.runShellCommand(args.command);
       return { text: `stdout: ${result.stdout}\nstderr: ${result.stderr}` };
     }
+  },
+  {
+    name: 'desktop_window_action',
+    description: 'Minimize, maximize, restore, or close a window by matching a substring of its title. Use desktop_list_windows first to see exact titles.',
+    parameters: {
+      type: 'object',
+      properties: {
+        titleSubstring: { type: 'string' },
+        action: { type: 'string', enum: ['minimize', 'maximize', 'restore', 'close'] }
+      },
+      required: ['titleSubstring', 'action']
+    },
+    // 'close' can discard unsaved work in the target app, same category as
+    // a destructive terminal command -- everything else (minimize/
+    // maximize/restore) is purely cosmetic window-state and safe to run
+    // freely.
+    tier: (args: any) => (args?.action === 'close' ? 'ask' : 'safe'),
+    handler: async (args) => {
+      const ok = await desktop.setWindowState(args.titleSubstring, args.action);
+      return {
+        text: ok
+          ? `${args.action} applied to window matching "${args.titleSubstring}".`
+          : `No window found matching "${args.titleSubstring}".`
+      };
+    }
+  },
+  {
+    name: 'desktop_clipboard_read',
+    description: 'Read the current text contents of the system clipboard.',
+    parameters: { type: 'object', properties: {} },
+    tier: 'safe',
+    handler: async () => ({ text: await desktop.readClipboard() })
+  },
+  {
+    name: 'desktop_clipboard_write',
+    description: 'Write text to the system clipboard (e.g. so it can be pasted with a hotkey into a field).',
+    parameters: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+    tier: 'safe',
+    handler: async (args) => {
+      await desktop.writeClipboard(args.text);
+      return { text: 'Clipboard updated.' };
+    }
+  },
+  {
+    name: 'desktop_cursor_position',
+    description: 'Get the current mouse cursor position in screen pixels.',
+    parameters: { type: 'object', properties: {} },
+    tier: 'safe',
+    handler: async () => ({ text: JSON.stringify(await desktop.getCursorPosition()) })
+  },
+  {
+    name: 'desktop_screen_resolution',
+    description: 'Get the primary screen resolution in real screen pixels (not the downscaled screenshot size -- use this to reason about where the edges of the screen are).',
+    parameters: { type: 'object', properties: {} },
+    tier: 'safe',
+    handler: async () => ({ text: JSON.stringify(await desktop.getScreenSize()) })
+  },
+  {
+    name: 'desktop_system_info',
+    description: 'Get basic system info: OS platform/release, CPU, total/free memory, uptime. Use for "what machine is this" style questions or to sanity-check available resources before a heavy task.',
+    parameters: { type: 'object', properties: {} },
+    tier: 'safe',
+    handler: async () => ({ text: JSON.stringify(desktop.getSystemInfo(), null, 2) })
   }
 ]);

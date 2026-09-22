@@ -15,6 +15,7 @@ interface FieldState {
   OMNIROUTE_BASE_URL: string;
   OMNIROUTE_MODEL: string;
   AGENT_MODEL: string;
+  AGENT_FALLBACK_MODEL: string;
   OMNIROUTE_STT_MODEL: string;
   GEMINI_STT_MODEL: string;
 }
@@ -40,6 +41,7 @@ export const CredentialsSection: React.FC = () => {
     OMNIROUTE_BASE_URL: '',
     OMNIROUTE_MODEL: '',
     AGENT_MODEL: '',
+    AGENT_FALLBACK_MODEL: '',
     OMNIROUTE_STT_MODEL: '',
     GEMINI_STT_MODEL: ''
   });
@@ -65,6 +67,7 @@ export const CredentialsSection: React.FC = () => {
         OMNIROUTE_BASE_URL: data.OMNIROUTE_BASE_URL || '',
         OMNIROUTE_MODEL: data.OMNIROUTE_MODEL || '',
         AGENT_MODEL: data.AGENT_MODEL || '',
+        AGENT_FALLBACK_MODEL: data.AGENT_FALLBACK_MODEL || '',
         OMNIROUTE_STT_MODEL: data.OMNIROUTE_STT_MODEL || '',
         GEMINI_STT_MODEL: data.GEMINI_STT_MODEL || ''
       });
@@ -223,6 +226,20 @@ export const CredentialsSection: React.FC = () => {
             value={fields.AGENT_MODEL}
             onChange={(e) => setFields({ ...fields, AGENT_MODEL: e.target.value })}
             placeholder="blank = reuse chat model"
+            className={inputClass}
+          />
+        </div>
+
+        <div>
+          <label className="text-xs font-mono text-slate-300 mb-1 block">
+            Agent Fallback Model (used if the primary agent model errors/times out):
+            <SourceTag source={config?.AGENT_FALLBACK_MODEL_SOURCE} />
+          </label>
+          <input
+            type="text"
+            value={fields.AGENT_FALLBACK_MODEL}
+            onChange={(e) => setFields({ ...fields, AGENT_FALLBACK_MODEL: e.target.value })}
+            placeholder="blank = no fallback, error surfaces as-is"
             className={inputClass}
           />
         </div>

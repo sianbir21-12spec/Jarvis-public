@@ -27,6 +27,13 @@ export interface RuntimeConfig {
   OMNIROUTE_BASE_URL: string;
   OMNIROUTE_MODEL: string;
   AGENT_MODEL: string;
+  // Retried once, automatically, when the primary AGENT_MODEL/OMNIROUTE_MODEL
+  // call fails with something that looks like an outage (5xx or a step
+  // timeout) -- see callGatewayWithFallback() in agentLoop.ts. Empty string
+  // (the default) means "no fallback configured", not "use the default
+  // model" -- an outage just surfaces as an error, same as before this
+  // existed.
+  AGENT_FALLBACK_MODEL: string;
   OMNIROUTE_STT_MODEL: string;
   GEMINI_API_KEY: string;
   GEMINI_STT_MODEL: string;
@@ -37,6 +44,7 @@ export const CONFIG_DEFAULTS: RuntimeConfig = {
   OMNIROUTE_BASE_URL: 'https://omnirouuter.zeabur.app',
   OMNIROUTE_MODEL: 'SIAN',
   AGENT_MODEL: '',
+  AGENT_FALLBACK_MODEL: '',
   OMNIROUTE_STT_MODEL: 'whisper-1',
   GEMINI_API_KEY: '',
   GEMINI_STT_MODEL: 'gemini-3.6-flash'

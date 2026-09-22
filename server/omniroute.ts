@@ -37,8 +37,37 @@ export const OMNIROUTE_CONFIG = {
   },
   get defaultModel(): string {
     return getConfig('OMNIROUTE_MODEL');
+  },
+  // Used when the primary model errors out (down, rate-limited, etc.) --
+  // set AGENT_FALLBACK_MODEL to enable; empty/unset means "no fallback,
+  // surface the error" rather than silently trying something the user
+  // never configured.
+  get fallbackModel(): string {
+    return getConfig('AGENT_FALLBACK_MODEL') || '';
   }
 };
+
+// Capability detection: don't assume every model on the gateway supports
+// vision or tool-calling. This is a best-effort name-match table, not a
+// live capability probe (OmniRoute has no capability-discovery endpoint
+// to query) -- unknown models default to "assume both supported" so
+// nothing already working breaks, but known-text-only families are
+// flagged so callers can skip sending images/tools to them instead of
+// getting a confusing 400 from the gateway.
+const KNOWN_NO_VISION = [/^gpt-3\.5/i, /^text-/i, /^davinci/i, /^curie/i];
+const KNOWN_NO_TOOLS = [/^text-/i, /^davinci/i, /^curie/i];
+
+export interface ModelCapabilities {
+  vision: boolean;
+  tools: boolean;
+}
+
+export function getModelCapabilities(model: string): ModelCapabilities {
+  return {
+    vision: !KNOWN_NO_VISION.some((p) => p.test(model)),
+    tools: !KNOWN_NO_TOOLS.some((p) => p.test(model))
+  };
+}
 
 /**
  * Validates message array before sending to gateway

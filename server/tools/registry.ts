@@ -99,6 +99,44 @@ export function isBlocked(name: string, args: any): boolean {
   return getTier(name, args) === 'block';
 }
 
+// Lightweight JSON-schema validation -- just required-field presence and
+// primitive type checks, not a full schema validator. Enough to catch the
+// actual failure mode this exists for (model omits/mistypes an argument),
+// without the maintenance cost of a real ajv-style dependency for schemas
+// this simple.
+function validateArgs(tool: ToolDefinition, args: any): string | null {
+  const schema: any = tool.parameters;
+  if (!schema || schema.type !== 'object') return null;
+  const required: string[] = Array.isArray(schema.required) ? schema.required : [];
+  const props: Record<string, any> = schema.properties || {};
+
+  for (const key of required) {
+    if (args == null || args[key] === undefined || args[key] === null) {
+      return `Missing required argument "${key}" for tool "${tool.name}".`;
+    }
+  }
+  for (const [key, val] of Object.entries(args ?? {})) {
+    const propSchema = props[key];
+    if (!propSchema || val === undefined || val === null) continue;
+    const expected = propSchema.type;
+    if (!expected) continue;
+    const actual = Array.isArray(val) ? 'array' : typeof val;
+    if (expected === 'number' && actual !== 'number') {
+      return `Argument "${key}" for tool "${tool.name}" must be a number, got ${actual}.`;
+    }
+    if (expected === 'string' && actual !== 'string') {
+      return `Argument "${key}" for tool "${tool.name}" must be a string, got ${actual}.`;
+    }
+    if (expected === 'boolean' && actual !== 'boolean') {
+      return `Argument "${key}" for tool "${tool.name}" must be a boolean, got ${actual}.`;
+    }
+    if (expected === 'array' && actual !== 'array') {
+      return `Argument "${key}" for tool "${tool.name}" must be an array, got ${actual}.`;
+    }
+  }
+  return null;
+}
+
 export async function dispatch(name: string, args: any): Promise<ToolCallResult> {
   const tool = registry.get(name);
   if (!tool) {
@@ -108,6 +146,13 @@ export async function dispatch(name: string, args: any): Promise<ToolCallResult>
   // dispatching (agentLoop.ts does), a blocked call never actually runs.
   if (getTier(name, args) === 'block') {
     return { text: `Blocked: "${name}" is not permitted with these arguments (tier: BLOCK). This is not something the user can approve past -- pick a different approach.` };
+  }
+  const validationError = validateArgs(tool, args);
+  if (validationError) {
+    // Caught before the handler ever runs -- turns a would-be crash deep
+    // inside a tool (e.g. destructuring an undefined x/y) into a clear,
+    // recoverable message the model can act on immediately.
+    return { text: `Invalid arguments: ${validationError}` };
   }
   try {
     return await tool.handler(args);

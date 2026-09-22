@@ -22,7 +22,7 @@
 
 import { registerTools } from './registry.js';
 import * as desktop from './desktopControl.js';
-import { fetchOmniRouteChat, OMNIROUTE_CONFIG } from '../omniroute.js';
+import { fetchOmniRouteChat, OMNIROUTE_CONFIG, getModelCapabilities } from '../omniroute.js';
 import { getConfig } from '../runtimeConfig.js';
 import type { ScreenshotAnnotation } from './registry.js';
 
@@ -83,6 +83,17 @@ registerTools([
     tier: 'safe', // read-only: captures + analyzes, no state change
     handler: async (args) => {
       const shot = await desktop.captureScreen();
+      const model = visionModel();
+      const caps = getModelCapabilities(model);
+      if (!caps.vision) {
+        // Don't send an image to a model that's known not to support one --
+        // that's a confusing 400 from the gateway, not a clear failure.
+        // Say plainly what's missing instead of pretending detection ran.
+        return {
+          text: `Element detection unavailable: the configured model ("${model}") does not support image input. Set AGENT_MODEL to a vision-capable model, or fall back to desktop_screenshot + estimating coordinates directly from the image.`,
+          screenshot: shot
+        };
+      }
       const focusLine = args?.focus ? `\n\nFocus especially on: ${args.focus}` : '';
       const prompt = `${DETECTION_PROMPT}\n\nImage dimensions: ${shot.width}x${shot.height} pixels.${focusLine}`;
 

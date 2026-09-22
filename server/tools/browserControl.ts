@@ -207,6 +207,43 @@ export async function switchTab(index: number): Promise<void> {
   await pages[index].bringToFront();
 }
 
+export async function selectOption(selector: string, value: string): Promise<void> {
+  const page = await activePage();
+  await page.selectOption(selector, value);
+}
+
+// A single selector or literal text, whichever the model has at hand -- DOM
+// selector match is tried first since it's exact; text search falls back
+// to a Playwright text-content locator so "wait for the 'Sign in' button"
+// works even without a stable selector.
+export async function waitFor(selectorOrText: string, timeoutMs = 15000): Promise<{ matched: 'selector' | 'text' }> {
+  const page = await activePage();
+  try {
+    await page.waitForSelector(selectorOrText, { timeout: timeoutMs });
+    return { matched: 'selector' };
+  } catch {
+    await page.getByText(selectorOrText, { exact: false }).first().waitFor({ timeout: timeoutMs });
+    return { matched: 'text' };
+  }
+}
+
+export async function download(triggerSelector: string, timeoutMs = 30000): Promise<{ path: string; suggestedFilename: string }> {
+  const page = await activePage();
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: timeoutMs }),
+    page.click(triggerSelector)
+  ]);
+  const suggestedFilename = dl.suggestedFilename();
+  const savePath = path.join(os.homedir(), 'Downloads', suggestedFilename);
+  await dl.saveAs(savePath);
+  return { path: savePath, suggestedFilename };
+}
+
+export async function upload(selector: string, filePaths: string[]): Promise<void> {
+  const page = await activePage();
+  await page.setInputFiles(selector, filePaths);
+}
+
 export async function closeTab(index: number): Promise<void> {
   pages = pages.filter((p) => !p.isClosed());
   if (index < 0 || index >= pages.length) throw new Error(`No tab at index ${index}`);

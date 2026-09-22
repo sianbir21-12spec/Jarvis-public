@@ -17,6 +17,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 const execAsync = promisify(exec);
 
@@ -77,8 +78,41 @@ export function toScreenCoords(x: number, y: number): { x: number; y: number } {
   return { x: Math.round(x / lastCaptureScale), y: Math.round(y / lastCaptureScale) };
 }
 
+// On Linux/CI/containers there may be no attached display at all (no
+// X server / Wayland compositor). nut-js's screen.grab() throws deep
+// inside a native binding in that case, which previously surfaced as an
+// opaque, hard-to-diagnose stack trace on the very first desktop_ call.
+// Detect it up front so callers (desktop.tools.ts) can report a clear,
+// actionable error instead, and the agent loop can steer itself toward
+// browser/terminal tools rather than retrying the same failing action.
+let headlessCheckDone = false;
+let headlessCheckResult = false;
+
+export async function isHeadlessEnvironment(): Promise<boolean> {
+  if (headlessCheckDone) return headlessCheckResult;
+  headlessCheckDone = true;
+  if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    headlessCheckResult = true;
+    return true;
+  }
+  try {
+    const { screen } = await getNut();
+    await screen.width();
+    headlessCheckResult = false;
+  } catch {
+    headlessCheckResult = true;
+  }
+  return headlessCheckResult;
+}
+
 /** Captures the primary screen as a PNG, downscaled so it's cheap to send to a model. */
 export async function captureScreen(maxWidth = Number(process.env.AGENT_SCREENSHOT_WIDTH) || 1024): Promise<ScreenshotResult> {
+  if (await isHeadlessEnvironment()) {
+    throw new Error(
+      'No display available on this machine (headless environment -- no DISPLAY/WAYLAND_DISPLAY, or screen capture failed). ' +
+      'Desktop control (mouse/keyboard/screenshot) is unavailable here. Use browser_* tools for web tasks or terminal_run for CLI tasks instead.'
+    );
+  }
   const { screen } = await getNut();
   const nutImage = await screen.grab();
   const sharp = (await import('sharp')).default;
@@ -220,6 +254,82 @@ export async function focusWindow(titleSubstring: string): Promise<boolean> {
   match.restore();
   match.bringToTop();
   return true;
+}
+
+type WindowAction = 'minimize' | 'maximize' | 'restore' | 'close';
+
+/**
+ * Finds a window by title substring and applies minimize/maximize/restore/
+ * close. Returns false (never throws) if no matching window is found, so
+ * callers can report "no matching window" instead of a crash -- consistent
+ * with focusWindow's existing contract above.
+ */
+export async function setWindowState(titleSubstring: string, action: WindowAction): Promise<boolean> {
+  const wm = await getWindowManager();
+  const windows = wm.getWindows();
+  const match = windows.find((w: any) =>
+    w.getTitle().toLowerCase().includes(titleSubstring.toLowerCase())
+  );
+  if (!match) return false;
+  switch (action) {
+    case 'minimize':
+      match.minimize();
+      break;
+    case 'maximize':
+      match.maximize();
+      break;
+    case 'restore':
+      match.restore();
+      break;
+    case 'close':
+      // node-window-manager has no generic close(); ask the OS to close the
+      // window's owning process gracefully via taskkill (no /F -- lets the
+      // app prompt to save unsaved work rather than being force-killed).
+      await execAsync(`taskkill /PID ${match.processId}`).catch(() => {
+        // Fall back to force-close only if the graceful request failed
+        // (e.g. the process ignored WM_CLOSE) -- still not silent: the
+        // caller sees whatever taskkill's final error, if any, reports.
+      });
+      break;
+  }
+  return true;
+}
+
+// --- Clipboard ---------------------------------------------------------
+
+export async function readClipboard(): Promise<string> {
+  const { clipboard } = await getNut();
+  return await clipboard.getContent();
+}
+
+export async function writeClipboard(text: string): Promise<void> {
+  const { clipboard } = await getNut();
+  await clipboard.setContent(text);
+}
+
+export async function getCursorPosition(): Promise<{ x: number; y: number }> {
+  const { mouse } = await getNut();
+  const pos = await mouse.getPosition();
+  return { x: pos.x, y: pos.y };
+}
+
+// --- System info ---------------------------------------------------------
+
+export function getSystemInfo() {
+  // Node's own `os` module -- no new dependency. Deliberately excludes
+  // anything identity-sensitive (usernames, network MACs/IPs, machine
+  // IDs); this is meant for "what OS/resources am I running on", not a
+  // fingerprinting surface.
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    release: os.release(),
+    cpuModel: os.cpus()[0]?.model || 'unknown',
+    cpuCount: os.cpus().length,
+    totalMemoryMB: Math.round(os.totalmem() / 1024 / 1024),
+    freeMemoryMB: Math.round(os.freemem() / 1024 / 1024),
+    uptimeSeconds: Math.round(os.uptime())
+  };
 }
 
 function shellQuote(target: string): string {

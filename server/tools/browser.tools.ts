@@ -155,5 +155,72 @@ registerTools([
       await browser.closeTab(args.index);
       return { text: `Closed tab ${args.index}.` };
     }
+  },
+  {
+    name: 'browser_select_option',
+    description: 'Select an option in a <select> dropdown by its value attribute, using a DOM selector for the <select> element (get one from browser_get_interactive_elements).',
+    parameters: {
+      type: 'object',
+      properties: { selector: { type: 'string' }, value: { type: 'string' } },
+      required: ['selector', 'value']
+    },
+    handler: async (args) => {
+      await browser.selectOption(args.selector, args.value);
+      return { text: `Selected "${args.value}" in ${args.selector}.` };
+    }
+  },
+  {
+    name: 'browser_wait_for',
+    description: 'Wait until a DOM selector appears OR, if that is not a valid/matching selector, until visible text matching the string appears on the page. Use this instead of a fixed desktop_wait delay whenever you are waiting on something to load (navigation, an async render, a modal).',
+    parameters: {
+      type: 'object',
+      properties: {
+        selectorOrText: { type: 'string' },
+        timeoutMs: { type: 'number', description: 'Defaults to 15000.' }
+      },
+      required: ['selectorOrText']
+    },
+    handler: async (args) => {
+      try {
+        const result = await browser.waitFor(args.selectorOrText, args.timeoutMs);
+        return { text: `Matched (${result.matched}): "${args.selectorOrText}"` };
+      } catch (err: any) {
+        return { text: `Timed out waiting for "${args.selectorOrText}": ${err.message || err}` };
+      }
+    }
+  },
+  {
+    name: 'browser_download',
+    description: 'Click an element that triggers a file download and wait for it to finish saving to the Downloads folder. Returns the saved file path.',
+    parameters: {
+      type: 'object',
+      properties: {
+        triggerSelector: { type: 'string', description: 'DOM selector of the element to click (e.g. a download link/button).' },
+        timeoutMs: { type: 'number', description: 'Defaults to 30000.' }
+      },
+      required: ['triggerSelector']
+    },
+    tier: 'ask', // downloads land a file on the user's real disk -- ASK per the spec's tier definitions
+    handler: async (args) => {
+      const result = await browser.download(args.triggerSelector, args.timeoutMs);
+      return { text: `Downloaded "${result.suggestedFilename}" to ${result.path}` };
+    }
+  },
+  {
+    name: 'browser_upload',
+    description: 'Attach one or more local file paths to a file input element.',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'DOM selector of the <input type="file"> element.' },
+        filePaths: { type: 'array', items: { type: 'string' } }
+      },
+      required: ['selector', 'filePaths']
+    },
+    tier: 'ask', // sends local files to a remote page -- meaningful enough to confirm
+    handler: async (args) => {
+      await browser.upload(args.selector, args.filePaths);
+      return { text: `Uploaded ${args.filePaths.length} file(s) to ${args.selector}.` };
+    }
   }
 ]);
